@@ -1,0 +1,4 @@
+# ignonre models
+*.zip
+# ignore wandb logs
+wandb/
