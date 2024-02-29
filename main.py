@@ -275,9 +275,20 @@ class Env(gym.Env):
         
         if not valid_move:
             self.max_invalid_move_reset -= 1
+            wandb.log({"reward": config_dict["invalid_move_reward"],
+                       "box_final_distance": self.game.calculate_distance(self.game.box_cords[0][0], self.game.box_cords[0][1], self.game.final_cords[0][0], self.game.final_cords[0][1]),
+                       "box_player_distance": self.game.calculate_distance(self.game.box_cords[0][0], self.game.box_cords[0][1], self.game.x, self.game.y),
+                       "final_player_distance": self.game.calculate_distance(self.game.final_cords[0][0], self.game.final_cords[0][1], self.game.x, self.game.y),
+                       })
             return self.game.return_map_3d_array(), config_dict["invalid_move_reward"], False, {}
         
         if self.game.check_win():
+            # print("win")
+            wandb.log({"reward": config_dict["win_reward"],
+                       "box_final_distance": self.game.calculate_distance(new_x, new_y, self.game.final_cords[0][0], self.game.final_cords[0][1]),
+                       "box_player_distance": self.game.calculate_distance(new_x, new_y, self.game.x, self.game.y),
+                       "final_player_distance": self.game.calculate_distance(self.game.final_cords[0][0], self.game.final_cords[0][1], self.game.x, self.game.y),
+                       })
             return self.game.return_map_3d_array(), config_dict["win_reward"], True, {}
         
         if valid_move:
@@ -293,9 +304,6 @@ class Env(gym.Env):
             
             old_distance = self.game.calculate_distance(old_player_x, old_player_y, self.game.box_cords[0][0], self.game.box_cords[0][1])
             new_distance = self.game.calculate_distance(new_player_x, new_player_y, self.game.box_cords[0][0], self.game.box_cords[0][1])
-            
-            if new_distance < 1.5:
-                reward += config_dict["box_near_goal"]
                 
             if old_distance > new_distance:
                 reward += config_dict["box_player_reward"]
@@ -305,6 +313,9 @@ class Env(gym.Env):
             
             if old_distance > new_distance:
                 reward += config_dict["box_goal_reward"]
+                
+            if new_distance < 1.5:
+                reward += config_dict["box_near_goal"]
                 
             old_distance = self.game.calculate_distance(old_player_x, old_player_y, self.game.final_cords[0][0], self.game.final_cords[0][1])
             new_distance = self.game.calculate_distance(new_player_x, new_player_y, self.game.final_cords[0][0], self.game.final_cords[0][1])
@@ -390,12 +401,12 @@ config_dict = {
     'batch_size': 128,
     'model_name': generate_model_name(),
     'map_size': (10, 10),
-    'reset': 1250,
-    'box_near_goal': 1,
+    'reset': 10_000,
+    'box_near_goal': 1.75,
     'box_move_reward': 0.5,
-    'box_goal_reward': 1.5,
+    'box_goal_reward': 1.75,
     'box_player_reward': 0.15,
-    'final_player_reward': 0.05,
+    'final_player_reward': 0.0,
     'win_reward': 100,
     'invalid_move_reward': -10,
     'max_invalid_move_reset': 25,
@@ -427,7 +438,7 @@ config_dict = {
 # model.learn(total_timesteps=1_000_000)
 # model.save(generate_model_name())
 
-wandb.init(project="box_pusher-10*10-1.0", config=config_dict , name=config_dict['model_name'])   
+wandb.init(project="box_pusher-10*10-DQN", config=config_dict , name=config_dict['model_name'])   
 
 env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
 
