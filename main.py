@@ -294,6 +294,9 @@ class Env(gym.Env):
             old_distance = self.game.calculate_distance(old_player_x, old_player_y, self.game.box_cords[0][0], self.game.box_cords[0][1])
             new_distance = self.game.calculate_distance(new_player_x, new_player_y, self.game.box_cords[0][0], self.game.box_cords[0][1])
             
+            if new_distance < 1.5:
+                reward += config_dict["box_near_goal"]
+                
             if old_distance > new_distance:
                 reward += config_dict["box_player_reward"]
             
@@ -308,6 +311,7 @@ class Env(gym.Env):
             
             if old_distance > new_distance:
                 reward += config_dict["final_player_reward"]
+                
             
             # if distance_box_final[new_x][new_y] > distance_box_final[old_x][old_y]:
             #     reward += config_dict["box_goal_reward"]
@@ -382,12 +386,14 @@ def generate_model_name():
 config_dict = {
     'learning_rate': 0.001,
     'net_arch': {'pi': [512,512,256,128], 'vf': [512,512,256,128]},
-    'batch_size': 2048,
+    'net_arch_dqn': [2048, 2048, 2048 ,2048],
+    'batch_size': 128,
     'model_name': generate_model_name(),
     'map_size': (10, 10),
     'reset': 1250,
-    'box_move_reward': 0.25,
-    'box_goal_reward': 1.25,
+    'box_near_goal': 1,
+    'box_move_reward': 0.5,
+    'box_goal_reward': 1.5,
     'box_player_reward': 0.15,
     'final_player_reward': 0.05,
     'win_reward': 100,
@@ -428,7 +434,7 @@ env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['ma
 if config_dict['model_type'] == 'PPO':
     model = PPO("MlpPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch']) , batch_size=config_dict['batch_size'])
 elif config_dict['model_type'] == 'DQN':
-    model = DQN("MlpPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=[1024, 1024, 512]) , batch_size=config_dict['batch_size'])
+    model = DQN("MlpPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
     # NOTE: DQN models are probably better
     # TODO: try more experiments with DQN models
     
