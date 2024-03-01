@@ -309,7 +309,7 @@ class Env(gym.Env):
         if valid_move:
             # return self.game.return_map_3d_array(), 0, False, {}
             
-            reward = 0
+            reward = config_dict["preform_step"]
             new_x, new_y = self.game.box_cords[0]
             
             if new_x != old_x or new_y != old_y:
@@ -331,6 +331,9 @@ class Env(gym.Env):
                 
             if new_distance < 1.5:
                 reward += config_dict["box_near_goal"]
+                
+            if new_distance < 3:
+                reward += config_dict["box_close_goal"]
                 
             old_distance = self.game.calculate_distance(old_player_x, old_player_y, self.game.final_cords[0][0], self.game.final_cords[0][1])
             new_distance = self.game.calculate_distance(new_player_x, new_player_y, self.game.final_cords[0][0], self.game.final_cords[0][1])
@@ -414,20 +417,22 @@ def generate_model_name():
 config_dict = {
     'learning_rate': 0.001,
     'net_arch': {'pi': [512,512,256,128], 'vf': [512,512,256,128]},
-    'net_arch_dqn': [1024, 1024, 512 ,256],
+    'net_arch_dqn': [1024, 1024, 1024 ,256],
     'batch_size': 128,
     'model_name': generate_model_name(),
     'map_size': (10, 10),
-    'reset': 10_000,
-    'box_near_goal': 1.75,
-    'box_move_reward': 0.5,
-    'box_goal_reward': 1.15,
-    'box_player_reward': 0.15,
-    'final_player_reward': 0.05,
+    'reset': 1000,
+    'box_near_goal': 0.25,
+    'box_close_goal' : 0.15,
+    'box_move_reward': 0.01,
+    'box_goal_reward': 0.05,
+    'box_player_reward': 0.0,
+    'final_player_reward': 0.00,
+    'preform_step' : -0.5,
     'win_reward': 100,
     'invalid_move_reward': -10,
-    'max_invalid_move_reset': 250,
-    'model_type': 'PPO',
+    'max_invalid_move_reset': 25,
+    'model_type': 'DQN',
     'policy': 'MlpPolicy'
 }
 
@@ -486,11 +491,22 @@ with open(config_name, 'w') as f:
 
 #  TODO: create function for loading and eavluation of the model
 
-# continue training
-# model = DQN.load('model-1709072870.zip', env) 
-# model.learn(total_timesteps=1_000_000)
-# model.save(generate_model_name())
-        
+def load_model_and_continue_training(model_name, model_type, config_dict_file):
+    config_dict = json.load(open(config_dict_file))
+    wandb.init(project="box_pusher-10*10-DQN", config=config_dict , name=config_dict['model_name'])   
+    if model_type == 'PPO':
+        env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
+        env.reset()
+        model = PPO.load(model_name)
+    elif model_type == 'DQN':
+        env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
+        env.reset()
+        model = DQN.load(model_name)
+    model.learn(total_timesteps=1_000_000 , progress_bar=True)
+    model.save(config_dict['model_name'])
+    config_name = config_dict['model_name']+'.json'
+    with open(config_name, 'w') as f:
+        json.dump(config_dict, f)
 
     
    
