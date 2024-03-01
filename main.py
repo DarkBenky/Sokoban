@@ -12,7 +12,6 @@ from stable_baselines3.common.callbacks import BaseCallback
 from queue import PriorityQueue
 import json
 
-
 class Game():
     def __init__(self, player_x, player_y, player_char='X', wall_char='#', empty_char='.', box_char='O', final_char='$', final_cords=[(3, 3)],
                  box_cords=[(5, 6)], wall_cords = [(0, 0),(0, 9),(9, 0),(9, 9)], map_size=(10, 10) , path_char = 'P'):
@@ -311,7 +310,6 @@ class Env(gym.Env):
             return self.reset(), config_dict["win_reward"], True, {}
         
         if valid_move:
-            # return self.game.return_map_3d_array(), 0, False, {}
             
             reward = config_dict["preform_step"]
             new_x, new_y = self.game.box_cords[0]
@@ -345,15 +343,6 @@ class Env(gym.Env):
             if old_distance > new_distance:
                 reward += config_dict["final_player_reward"]
                 
-            
-            # if distance_box_final[new_x][new_y] > distance_box_final[old_x][old_y]:
-            #     reward += config_dict["box_goal_reward"]
-            
-            # if distance_box_player[new_x][new_y] > distance_box_player[old_x][old_y]:
-            #     reward += config_dict["box_player_reward"]
-            
-            # if distance_final_player[new_player_x][new_player_y] > distance_final_player[old_player_x][old_player_y]:
-            #     reward += config_dict["final_player_reward"]
             if self.current_step % 20 == 0:
                 wandb.log({ "reward": reward,
                             'valid_move': 1,
@@ -367,37 +356,6 @@ class Env(gym.Env):
 
 
     def reset(self):
-        # size = self.map_size[0]
-        # wall_cords = []
-        # for _ in range((size * size) // 5):
-        #     x = random.randint(0, size - 1)
-        #     y = random.randint(0, size - 1)
-        #     if (x, y) not in wall_cords:
-        #         wall_cords.append((x, y))
-
-        # final_cords = []
-        # while not final_cords:
-        #     x = random.randint(0, size - 1)
-        #     y = random.randint(0, size - 1)
-        #     if (x, y) not in wall_cords:
-        #         final_cords.append((x, y))
-
-        # box_cords = []
-        # while True:
-        #     x = random.randint(0, size - 1)
-        #     y = random.randint(0, size - 1)
-        #     if (x, y) not in wall_cords and (x, y) not in final_cords:
-        #         box_cords.append((x, y))
-        #         break
-
-        # player_cords = []
-        # while True:
-        #     x = random.randint(0, size - 1)
-        #     y = random.randint(0, size - 1)
-        #     if (x, y) not in wall_cords and (x, y) not in final_cords and (x, y) not in box_cords:
-        #         player_cords.append((x, y))
-        #         break
-        
         walls , player_x , player_y , box , goals = load_function_from_json()
         self.current_step = 0
         self.max_invalid_move_reset = config_dict["max_invalid_move_reset"]
@@ -411,9 +369,35 @@ class Env(gym.Env):
         print(self.game.show_map())
       
 class CustomCallback(BaseCallback):
-    pass
-        
-        
+    def __init__(self, verbose=0 , eval_freq = 1000 , config_dict = {}):
+        super(CustomCallback, self).__init__(verbose)
+        self.eval_freq = eval_freq
+        self.config = config_dict
+        self.best_result = 0
+    
+    def _on_step(self):
+        if self.n_calls % self.eval_freq == 0 and self.n_calls > 0:
+            model_performance = 0
+            for _ in range(10):
+                obs = self.model.env.reset()
+                done = False
+                steps = 100
+                while not done or steps <= 0:
+                    action, _states = self.model.predict(obs, deterministic=True)
+                    obs, reward, done, info = self.model.env.step(action)
+                    if done:
+                        if reward >= 100:
+                            model_performance += 100 / steps
+            if model_performance > self.best_result:
+                self.best_result = model_performance
+                self.model.save(self.config['folder_path_for_models']+ '/' +self.config['model_name'] + '-best')
+                file_name = self.config['folder_path_for_models'] + '/' + self.config['model_name']+'.json'
+                with open(file_name, 'w') as f:
+                    json.dump(self.config, f)
+            wandb.log({'model_performance': model_performance})
+            print(f"Model performance: {model_performance}")
+        return True
+              
         
 def generate_model_name():
     import time
@@ -438,35 +422,12 @@ config_dict = {
     'invalid_move_reward': -10,
     'max_invalid_move_reset': 10,
     'model_type': 'DQN',
-    'policy': 'MlpPolicy'
+    'policy': 'MlpPolicy',
+    'folder_path_for_models': 'models',
 }
 
-# class DQN(nn.Module):
-#     def __init__(self, env):
-#         super(DQN, self).__init__()
-#         self.flatten_size = env.observation_space.shape[0] * env.observation_space.shape[1] * env.observation_space.shape[2]
-#         self.network = nn.Sequential(
-#             nn.Linear(self.flatten_size, 512),
-#             nn.ReLU(),
-#             nn.Linear(512, 256),
-#             nn.ReLU(),
-#             nn.Linear(256, 128),
-#             nn.ReLU(),
-#             nn.Linear(128, env.action_space.n)
-#         )
 
-#     def forward(self, x):
-#         return self.network(x)
-
-
-# env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
-
-# model = DQN(env)
-
-# model.learn(total_timesteps=1_000_000)
-# model.save(generate_model_name())
-
-wandb.init(project="box_pusher-10*10-DQN", config=config_dict , name=config_dict['model_name'])   
+wandb.init(project="sokoban-0.1", config=config_dict , name=config_dict['model_name'])   
 
 
 
@@ -488,11 +449,12 @@ elif config_dict['model_type'] == 'DQN':
     # NOTE: DQN models are probably better
     # TODO: try more experiments with DQN models
     
-model.learn(total_timesteps=3_000_000 , progress_bar=True)
-model.save(generate_model_name())
-config_name = config_dict['model_name']+'.json'
-with open(config_name, 'w') as f:
-    json.dump(config_dict, f)
+model.learn(total_timesteps=1_000_000 , progress_bar=True)
+
+# model.save(generate_model_name())
+# config_name = config_dict['model_name']+'.json'
+# with open(config_name, 'w') as f:
+#     json.dump(config_dict, f)
 
 #  TODO: create function for loading and eavluation of the model
 
