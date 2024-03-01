@@ -275,21 +275,24 @@ class Env(gym.Env):
         
         if not valid_move:
             self.max_invalid_move_reset -= 1
-            wandb.log({"reward": config_dict["invalid_move_reward"],
-                       "box_final_distance": self.game.calculate_distance(self.game.box_cords[0][0], self.game.box_cords[0][1], self.game.final_cords[0][0], self.game.final_cords[0][1]),
-                       "box_player_distance": self.game.calculate_distance(self.game.box_cords[0][0], self.game.box_cords[0][1], self.game.x, self.game.y),
-                       "final_player_distance": self.game.calculate_distance(self.game.final_cords[0][0], self.game.final_cords[0][1], self.game.x, self.game.y),
-                       })
+            if self.current_step % 100:
+                wandb.log({"reward": config_dict["invalid_move_reward"],
+                        'valid_move': 0,
+                        'win': 0,
+                        "box_final_distance": self.game.calculate_distance(self.game.box_cords[0][0], self.game.box_cords[0][1], self.game.final_cords[0][0], self.game.final_cords[0][1]),
+                        "box_player_distance": self.game.calculate_distance(self.game.box_cords[0][0], self.game.box_cords[0][1], self.game.x, self.game.y),
+                        "final_player_distance": self.game.calculate_distance(self.game.final_cords[0][0], self.game.final_cords[0][1], self.game.x, self.game.y),
+                        })
             return self.game.return_map_3d_array(), config_dict["invalid_move_reward"], False, {}
         
         if self.game.check_win():
-            # print("win")
-            wandb.log({"reward": config_dict["win_reward"],
-                       "box_final_distance": self.game.calculate_distance(new_x, new_y, self.game.final_cords[0][0], self.game.final_cords[0][1]),
-                       "box_player_distance": self.game.calculate_distance(new_x, new_y, self.game.x, self.game.y),
-                       "final_player_distance": self.game.calculate_distance(self.game.final_cords[0][0], self.game.final_cords[0][1], self.game.x, self.game.y),
-                       })
-            return self.game.return_map_3d_array(), config_dict["win_reward"], True, {}
+            wandb.log({
+                "reward": config_dict["win_reward"],
+                'valid_move': 1,
+                'win': 1,
+                'box_final_distance': 0,
+            })
+            return self.reset(), config_dict["win_reward"], True, {}
         
         if valid_move:
             # return self.game.return_map_3d_array(), 0, False, {}
@@ -332,12 +335,14 @@ class Env(gym.Env):
             
             # if distance_final_player[new_player_x][new_player_y] > distance_final_player[old_player_x][old_player_y]:
             #     reward += config_dict["final_player_reward"]
-            
-            wandb.log({"reward": reward,
-                       "box_final_distance": self.game.calculate_distance(new_x, new_y, self.game.final_cords[0][0], self.game.final_cords[0][1]),
-                       "box_player_distance": self.game.calculate_distance(new_x, new_y, self.game.x, self.game.y),
-                       "final_player_distance": self.game.calculate_distance(self.game.final_cords[0][0], self.game.final_cords[0][1], self.game.x, self.game.y),
-                       })
+            if self.current_step % 500:
+                wandb.log({ "reward": reward,
+                            'valid_move': 1,
+                            'win': 0,
+                            "box_final_distance": self.game.calculate_distance(new_x, new_y, self.game.final_cords[0][0], self.game.final_cords[0][1]),
+                            "box_player_distance": self.game.calculate_distance(new_x, new_y, self.game.x, self.game.y),
+                            "final_player_distance": self.game.calculate_distance(self.game.final_cords[0][0], self.game.final_cords[0][1], self.game.x, self.game.y),
+                        })
             return self.game.return_map_3d_array(), reward, False, {}
 
 
@@ -397,19 +402,19 @@ def generate_model_name():
 config_dict = {
     'learning_rate': 0.001,
     'net_arch': {'pi': [512,512,256,128], 'vf': [512,512,256,128]},
-    'net_arch_dqn': [2048, 2048, 2048 ,2048],
+    'net_arch_dqn': [8196, 8196, 4048 ,4048],
     'batch_size': 128,
     'model_name': generate_model_name(),
     'map_size': (10, 10),
     'reset': 10_000,
-    'box_near_goal': 1.75,
-    'box_move_reward': 0.5,
-    'box_goal_reward': 1.75,
+    'box_near_goal': 1.85,
+    'box_move_reward': 0.85,
+    'box_goal_reward': 1.25,
     'box_player_reward': 0.15,
-    'final_player_reward': 0.0,
+    'final_player_reward': 0.1,
     'win_reward': 100,
     'invalid_move_reward': -10,
-    'max_invalid_move_reset': 25,
+    'max_invalid_move_reset': 250,
     'model_type': 'DQN',
 }
 
