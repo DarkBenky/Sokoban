@@ -268,7 +268,6 @@ class Env(gym.Env):
         self.current_step = 0
         self.reset_step = reset_step
         self.max_invalid_move_reset = max_invalid_move_reset
-        self.wins = 0
 
     def step(self, action):
         action = ['up', 'down', 'left', 'right'][action]
@@ -289,8 +288,6 @@ class Env(gym.Env):
             if self.current_step % 2 == 0:
                 wandb.log({"reward": config_dict["invalid_move_reward"],
                         'valid_move': 0,
-                        'win': 0,
-                        'win_count': self.wins,
                         "box_final_distance": self.game.calculate_distance(self.game.box_cords[0][0], self.game.box_cords[0][1], self.game.final_cords[0][0], self.game.final_cords[0][1]),
                         "box_player_distance": self.game.calculate_distance(self.game.box_cords[0][0], self.game.box_cords[0][1], self.game.x, self.game.y),
                         "final_player_distance": self.game.calculate_distance(self.game.final_cords[0][0], self.game.final_cords[0][1], self.game.x, self.game.y),
@@ -299,12 +296,9 @@ class Env(gym.Env):
         
         if self.game.check_win():
             print('win')
-            self.wins += 1
             wandb.log({
                 "reward": config_dict["win_reward"],
                 'valid_move': 1,
-                'win': 1,
-                'win_count': self.wins,
                 'box_final_distance': 0,
             })
             return self.reset(), config_dict["win_reward"], True, {}
@@ -346,8 +340,6 @@ class Env(gym.Env):
             if self.current_step % 20 == 0:
                 wandb.log({ "reward": reward,
                             'valid_move': 1,
-                            'win': 0,
-                            'win_count': self.wins,
                             "box_final_distance": self.game.calculate_distance(new_x, new_y, self.game.final_cords[0][0], self.game.final_cords[0][1]),
                             "box_player_distance": self.game.calculate_distance(new_x, new_y, self.game.x, self.game.y),
                             "final_player_distance": self.game.calculate_distance(self.game.final_cords[0][0], self.game.final_cords[0][1], self.game.x, self.game.y),
@@ -381,17 +373,18 @@ class CustomCallback(BaseCallback):
             for _ in range(10):
                 obs = self.model.env.reset()
                 done = False
-                steps = 100
-                while not done or steps <= 0:
+                steps = 75
+                while not done or steps > 0:
                     action, _states = self.model.predict(obs, deterministic=True)
                     obs, reward, done, info = self.model.env.step(action)
+                    steps -= 1
                     if done:
                         if reward >= 100:
                             model_performance += 100 / steps
             if model_performance > self.best_result:
                 self.best_result = model_performance
                 self.model.save(self.config['folder_path_for_models']+ '/' +self.config['model_name'] + '-best')
-                file_name = self.config['folder_path_for_models'] + '/' + self.config['model_name']+'.json'
+                file_name = self.config['folder_path_for_models'] + '/' + self.config['model_name']+ '-best' + '.json'
                 with open(file_name, 'w') as f:
                     json.dump(self.config, f)
             wandb.log({'model_performance': model_performance})
@@ -402,6 +395,31 @@ class CustomCallback(BaseCallback):
 def generate_model_name():
     import time
     return f"model-{int(time.time())}"
+
+def generate_random_params():
+    return {
+        'learning_rate': random.uniform(0.0001, 0.1),
+        'net_arch': {'pi': [random.randint(64, 1024) for _ in range(random.randint(1, 5))],
+                     'vf': [random.randint(64, 1024) for _ in range(random.randint(1, 5))]},
+        'net_arch_dqn': [random.randint(64, 1024) for _ in range(random.randint(1, 5))],
+        'batch_size': random.choice([32, 64, 128, 256]),
+        'model_name': generate_model_name(),
+        'map_size': (10, 10),
+        'reset': random.randint(50, 200),
+        'box_near_goal': random.uniform(0.0, 1.0),
+        'box_close_goal': random.uniform(0.0, 1.0),
+        'box_move_reward': random.uniform(-1.0, 1.0),
+        'box_goal_reward': random.uniform(-1.0, 1.0),
+        'box_player_reward': random.uniform(-1.0, 1.0),
+        'final_player_reward': random.uniform(-1.0, 1.0),
+        'preform_step': random.uniform(-1.0, 1.0),
+        'win_reward': random.randint(50, 200),
+        'invalid_move_reward': random.uniform(-20.0, 0.0),
+        'max_invalid_move_reset': random.randint(5, 20),
+        'model_type': random.choice(['PPO', 'DQN']),
+        'policy': random.choice(['MlpPolicy']),
+        'folder_path_for_models': 'models-tone',
+    }
             
 config_dict = {
     'learning_rate': 0.001,
@@ -426,6 +444,54 @@ config_dict = {
     'folder_path_for_models': 'models',
 }
 
+def toneParams(tries = 100):
+    best_params = {}
+    best_result = 0
+    best_model = None
+    for _ in range(tries):
+        config_dict = generate_random_params()
+        wandb.init(project="sokoban-tone", config=config_dict , name=config_dict['model_name'])
+        env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
+        env.reset()
+        if config_dict['model_type'] == 'PPO':
+            model = PPO("MlpPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch']) , batch_size=config_dict['batch_size'])
+        elif config_dict['model_type'] == 'DQN':
+            if config_dict['policy'] == 'CnnPolicy':
+                env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset'] , complex=False))
+                env.reset()
+                model = DQN("CnnPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
+            else:
+                env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
+                env.reset()
+                model = DQN("MlpPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
+        model.learn(total_timesteps=100_000 , progress_bar=True , callback=CustomCallback(eval_freq=10_000 , config_dict=config_dict))
+        model_performance = 0
+        for _ in range(10):
+            obs = model.env.reset()
+            done = False
+            steps = 75
+            while not done or steps <= 0:
+                action, _states = model.predict(obs, deterministic=True)
+                obs, reward, done, info = model.env.step(action)
+                steps -= 1
+                if done:
+                    if reward >= 100:
+                        model_performance += 75 / steps
+        if model_performance > best_result:
+            best_result = model_performance
+            best_params = config_dict
+            best_model = model
+    return best_params , best_model
+
+
+
+# NOTE: uncomment the following line to run the toneParams function
+# best_params , best_model = toneParams()
+# best_model.save(best_params['folder_path_for_models'] + '/' + best_params['model_name']+ '-best-tone')
+# file_name = best_params['folder_path_for_models'] + '/' + best_params['model_name']+'-best-tone'+'.json'
+# with open(file_name, 'w') as f:
+#     json.dump(best_params, f)
+
 
 wandb.init(project="sokoban-0.1", config=config_dict , name=config_dict['model_name'])   
 
@@ -449,31 +515,10 @@ elif config_dict['model_type'] == 'DQN':
     # NOTE: DQN models are probably better
     # TODO: try more experiments with DQN models
     
-model.learn(total_timesteps=1_000_000 , progress_bar=True)
+model.learn(total_timesteps=1_000_000 , progress_bar=True , callback=CustomCallback(eval_freq=10_000 , config_dict=config_dict))
 
-# model.save(generate_model_name())
-# config_name = config_dict['model_name']+'.json'
-# with open(config_name, 'w') as f:
-#     json.dump(config_dict, f)
 
-#  TODO: create function for loading and eavluation of the model
-
-def load_model_and_continue_training(model_name, model_type, config_dict_file):
-    config_dict = json.load(open(config_dict_file))
-    wandb.init(project="box_pusher-10*10-DQN", config=config_dict , name=config_dict['model_name'])   
-    if model_type == 'PPO':
-        env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
-        env.reset()
-        model = PPO.load(model_name)
-    elif model_type == 'DQN':
-        env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
-        env.reset()
-        model = DQN.load(model_name)
-    model.learn(total_timesteps=1_000_000 , progress_bar=True)
-    model.save(config_dict['model_name'])
-    config_name = config_dict['model_name']+'.json'
-    with open(config_name, 'w') as f:
-        json.dump(config_dict, f)
+#  TODO: create function for loading and evaluation of the model
 
     
    
