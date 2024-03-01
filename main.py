@@ -137,8 +137,9 @@ class Game():
             for j in range(len(array_2d)):
                 box_player[j][i] = (distance_box[j][i] + distance_player[j][i]) / 2
                 box_final[j][i] = (distance_box[j][i] + distance_final[j][i]) / 2
-                final_player[j][i] = (distance_final[j][i] + distance_player[j][i]) /2  
-        return box_player , box_final , final_player , distance_box , distance_player , distance_final
+                final_player[j][i] = (distance_final[j][i] + distance_player[j][i]) /2
+        return box_player , box_final , final_player 
+        # return box_player , box_final , final_player , distance_box , distance_player , distance_final
                    
         
               
@@ -151,25 +152,31 @@ class Game():
         # for cord in path:
         #     path_map[cord[1]][cord[0]] = 1
         
-        distance_box_final , distance_box_player , distance_final_player , distance_box , distance_player , distance_final = self.generate_heatmap()
+        distance_box_final , distance_box_player , distance_final_player = self.generate_heatmap()
             
         player_map = [[0 for _ in range(self.map_size[0])] for _ in range(self.map_size[1])]
+        full_map = [[0 for _ in range(self.map_size[0])] for _ in range(self.map_size[1])]
         player_map[self.y][self.x] = self.player_char
+        full_map[self.y][self.x] = 1
 
         box_map = [[0 for _ in range(self.map_size[0])] for _ in range(self.map_size[1])]
         for cord in self.box_cords:
             box_map[cord[1]][cord[0]] = self.box_char
+            full_map[cord[1]][cord[0]] = 2
             
         wall_map = [[0 for _ in range(self.map_size[0])] for _ in range(self.map_size[1])]
         for cord in self.wall_cords:
             wall_map[cord[1]][cord[0]] = self.wall_char
+            full_map[cord[1]][cord[0]] = 3
         
         final_map = [[0 for _ in range(self.map_size[0])] for _ in range(self.map_size[1])] 
         for cord in self.final_cords:
             final_map[cord[1]][cord[0]] = self.final_char
-        
-        map = [player_map, box_map, wall_map, final_map , distance_box_final , distance_box_player , distance_final_player , distance_box , distance_player , distance_final]
-        return map
+            full_map[cord[1]][cord[0]] = 4
+            
+        if complex:
+            return [full_map , player_map, box_map, wall_map, final_map , distance_box_final , distance_box_player , distance_final_player]
+        return full_map
     
     def find_path_to_goal(self):
         def heuristic(node, goal):
@@ -253,7 +260,11 @@ class Env(gym.Env):
     def __init__(self , map_size = (20, 20) , reset_step = 2500 , max_invalid_move_reset = 100):
         self.game = Game(player_x=3, player_y=6, player_char=1, wall_char=2, empty_char=0, box_char=3, final_char=4 , map_size=map_size)
         self.action_space = spaces.Discrete(4)
-        self.observation_space = spaces.Box(low=0, high=1, shape=(10, 10, 10 ), dtype=np.float32)
+        # self.complex = complex
+        # if self.complex:
+        self.observation_space = spaces.Box(low=0, high=1, shape=(8, 10, 10 ), dtype=np.float32)
+        # else:
+        #     self.observation_space = spaces.Box(low=0, high=4, shape=(10, 10), dtype=np.float32)
         self.map_size = map_size
         self.current_step = 0
         self.reset_step = reset_step
@@ -275,7 +286,7 @@ class Env(gym.Env):
         
         if not valid_move:
             self.max_invalid_move_reset -= 1
-            if self.current_step % 1000:
+            if self.current_step % 10_000:
                 wandb.log({"reward": config_dict["invalid_move_reward"],
                         'valid_move': 0,
                         'win': 0,
@@ -336,7 +347,7 @@ class Env(gym.Env):
             
             # if distance_final_player[new_player_x][new_player_y] > distance_final_player[old_player_x][old_player_y]:
             #     reward += config_dict["final_player_reward"]
-            if self.current_step % 10_000:
+            if self.current_step % 100_000:
                 wandb.log({ "reward": reward,
                             'valid_move': 1,
                             'win': 0,
@@ -403,7 +414,7 @@ def generate_model_name():
 config_dict = {
     'learning_rate': 0.001,
     'net_arch': {'pi': [512,512,256,128], 'vf': [512,512,256,128]},
-    'net_arch_dqn': [8196, 8196, 4048 ,4048],
+    'net_arch_dqn': [1024, 1024, 512 ,256],
     'batch_size': 128,
     'model_name': generate_model_name(),
     'map_size': (10, 10),
@@ -416,8 +427,8 @@ config_dict = {
     'win_reward': 100,
     'invalid_move_reward': -10,
     'max_invalid_move_reset': 250,
-    'model_type': 'DQN',
-    'policy': 'CnnPolicy'
+    'model_type': 'PPO',
+    'policy': 'MlpPolicy'
 }
 
 # class DQN(nn.Module):
@@ -447,25 +458,34 @@ config_dict = {
 
 wandb.init(project="box_pusher-10*10-DQN", config=config_dict , name=config_dict['model_name'])   
 
-env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
+
 
 if config_dict['model_type'] == 'PPO':
+    env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
+    env.reset()
     model = PPO("MlpPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch']) , batch_size=config_dict['batch_size'])
 elif config_dict['model_type'] == 'DQN':
     if config_dict['policy'] == 'CnnPolicy':
+        env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset'] , complex=False))
+        env.reset()
         model = DQN("CnnPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
+    # NOTE: Maybe try different policy types but for CnnPolicy we need to change the observation space
+    # TODO: try more experiments with CnnPolicy and study more about it
     else:
+        env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
+        env.reset()
         model = DQN("MlpPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
     # NOTE: DQN models are probably better
     # TODO: try more experiments with DQN models
-    # NOTE: Maybe try different policy types
     
 model.learn(total_timesteps=1_000_000 , progress_bar=True)
 model.save(generate_model_name())
 config_name = config_dict['model_name']+'.json'
 with open(config_name, 'w') as f:
     json.dump(config_dict, f)
-    
+
+#  TODO: create function for loading and eavluation of the model
+
 # continue training
 # model = DQN.load('model-1709072870.zip', env) 
 # model.learn(total_timesteps=1_000_000)
