@@ -269,6 +269,7 @@ class Env(gym.Env):
         self.current_step = 0
         self.reset_step = reset_step
         self.max_invalid_move_reset = max_invalid_move_reset
+        self.wins = 0
 
     def step(self, action):
         action = ['up', 'down', 'left', 'right'][action]
@@ -286,10 +287,11 @@ class Env(gym.Env):
         
         if not valid_move:
             self.max_invalid_move_reset -= 1
-            if self.current_step % 10_000:
+            if self.current_step % 2 == 0:
                 wandb.log({"reward": config_dict["invalid_move_reward"],
                         'valid_move': 0,
                         'win': 0,
+                        'win_count': self.wins,
                         "box_final_distance": self.game.calculate_distance(self.game.box_cords[0][0], self.game.box_cords[0][1], self.game.final_cords[0][0], self.game.final_cords[0][1]),
                         "box_player_distance": self.game.calculate_distance(self.game.box_cords[0][0], self.game.box_cords[0][1], self.game.x, self.game.y),
                         "final_player_distance": self.game.calculate_distance(self.game.final_cords[0][0], self.game.final_cords[0][1], self.game.x, self.game.y),
@@ -298,10 +300,12 @@ class Env(gym.Env):
         
         if self.game.check_win():
             print('win')
+            self.wins += 1
             wandb.log({
                 "reward": config_dict["win_reward"],
                 'valid_move': 1,
                 'win': 1,
+                'win_count': self.wins,
                 'box_final_distance': 0,
             })
             return self.reset(), config_dict["win_reward"], True, {}
@@ -350,10 +354,11 @@ class Env(gym.Env):
             
             # if distance_final_player[new_player_x][new_player_y] > distance_final_player[old_player_x][old_player_y]:
             #     reward += config_dict["final_player_reward"]
-            if self.current_step % 100_000:
+            if self.current_step % 20 == 0:
                 wandb.log({ "reward": reward,
                             'valid_move': 1,
                             'win': 0,
+                            'win_count': self.wins,
                             "box_final_distance": self.game.calculate_distance(new_x, new_y, self.game.final_cords[0][0], self.game.final_cords[0][1]),
                             "box_player_distance": self.game.calculate_distance(new_x, new_y, self.game.x, self.game.y),
                             "final_player_distance": self.game.calculate_distance(self.game.final_cords[0][0], self.game.final_cords[0][1], self.game.x, self.game.y),
@@ -421,17 +426,17 @@ config_dict = {
     'batch_size': 128,
     'model_name': generate_model_name(),
     'map_size': (10, 10),
-    'reset': 1000,
-    'box_near_goal': 0.25,
-    'box_close_goal' : 0.15,
-    'box_move_reward': 0.01,
-    'box_goal_reward': 0.05,
+    'reset': 100,
+    'box_near_goal': 0.0,
+    'box_close_goal' : 0.0,
+    'box_move_reward': 0.0,
+    'box_goal_reward': 0.0,
     'box_player_reward': 0.0,
-    'final_player_reward': 0.00,
+    'final_player_reward': 0.0,
     'preform_step' : -0.5,
     'win_reward': 100,
     'invalid_move_reward': -10,
-    'max_invalid_move_reset': 25,
+    'max_invalid_move_reset': 10,
     'model_type': 'DQN',
     'policy': 'MlpPolicy'
 }
@@ -483,7 +488,7 @@ elif config_dict['model_type'] == 'DQN':
     # NOTE: DQN models are probably better
     # TODO: try more experiments with DQN models
     
-model.learn(total_timesteps=1_000_000 , progress_bar=True)
+model.learn(total_timesteps=3_000_000 , progress_bar=True)
 model.save(generate_model_name())
 config_name = config_dict['model_name']+'.json'
 with open(config_name, 'w') as f:
