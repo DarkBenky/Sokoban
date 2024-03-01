@@ -460,11 +460,11 @@ elif config_dict['model_type'] == 'DQN':
     # TODO: try more experiments with DQN models
     # NOTE: Maybe try different policy types
     
-model.learn(total_timesteps=1_000_000)
+model.learn(total_timesteps=1_000_000 , progress_bar=True)
 model.save(generate_model_name())
-# config_name = config_dict['model_name']+'.json'
-# with open(config_name, 'w') as f:
-#     json.dump(config_dict, f)
+config_name = config_dict['model_name']+'.json'
+with open(config_name, 'w') as f:
+    json.dump(config_dict, f)
     
 # continue training
 # model = DQN.load('model-1709072870.zip', env) 
