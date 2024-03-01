@@ -417,6 +417,7 @@ config_dict = {
     'invalid_move_reward': -10,
     'max_invalid_move_reset': 250,
     'model_type': 'DQN',
+    'policy': 'CnnPolicy'
 }
 
 # class DQN(nn.Module):
@@ -451,9 +452,13 @@ env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['ma
 if config_dict['model_type'] == 'PPO':
     model = PPO("MlpPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch']) , batch_size=config_dict['batch_size'])
 elif config_dict['model_type'] == 'DQN':
-    model = DQN("MlpPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
+    if config_dict['policy'] == 'CnnPolicy':
+        model = DQN("CnnPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
+    else:
+        model = DQN("MlpPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
     # NOTE: DQN models are probably better
     # TODO: try more experiments with DQN models
+    # NOTE: Maybe try different policy types
     
 model.learn(total_timesteps=1_000_000)
 model.save(generate_model_name())
