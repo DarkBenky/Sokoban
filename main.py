@@ -275,7 +275,7 @@ class Env(gym.Env):
         
         if not valid_move:
             self.max_invalid_move_reset -= 1
-            if self.current_step % 100:
+            if self.current_step % 1000:
                 wandb.log({"reward": config_dict["invalid_move_reward"],
                         'valid_move': 0,
                         'win': 0,
@@ -286,6 +286,7 @@ class Env(gym.Env):
             return self.game.return_map_3d_array(), config_dict["invalid_move_reward"], False, {}
         
         if self.game.check_win():
+            print('win')
             wandb.log({
                 "reward": config_dict["win_reward"],
                 'valid_move': 1,
@@ -335,7 +336,7 @@ class Env(gym.Env):
             
             # if distance_final_player[new_player_x][new_player_y] > distance_final_player[old_player_x][old_player_y]:
             #     reward += config_dict["final_player_reward"]
-            if self.current_step % 500:
+            if self.current_step % 10_000:
                 wandb.log({ "reward": reward,
                             'valid_move': 1,
                             'win': 0,
@@ -407,11 +408,11 @@ config_dict = {
     'model_name': generate_model_name(),
     'map_size': (10, 10),
     'reset': 10_000,
-    'box_near_goal': 1.85,
-    'box_move_reward': 0.85,
-    'box_goal_reward': 1.25,
+    'box_near_goal': 1.75,
+    'box_move_reward': 0.5,
+    'box_goal_reward': 1.15,
     'box_player_reward': 0.15,
-    'final_player_reward': 0.1,
+    'final_player_reward': 0.05,
     'win_reward': 100,
     'invalid_move_reward': -10,
     'max_invalid_move_reset': 250,
