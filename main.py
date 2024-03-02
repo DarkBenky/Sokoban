@@ -261,7 +261,7 @@ class Env(gym.Env):
         self.action_space = spaces.Discrete(4)
         # self.complex = complex
         # if self.complex:
-        self.observation_space = spaces.Box(low=0, high=1, shape=(8, 10, 10 ), dtype=np.float32)
+        self.observation_space = spaces.Box(low=0, high=4, shape=(8, 10, 10 ), dtype=np.float32)
         # else:
         #     self.observation_space = spaces.Box(low=0, high=4, shape=(10, 10), dtype=np.float32)
         self.map_size = map_size
@@ -365,7 +365,7 @@ class CustomCallback(BaseCallback):
         super(CustomCallback, self).__init__(verbose)
         self.eval_freq = eval_freq
         self.config = config_dict
-        self.best_result = 0
+        self.best_result = -np.inf
     
     def _on_step(self):
         if self.n_calls % self.eval_freq == 0 and self.n_calls > 0:
@@ -374,20 +374,21 @@ class CustomCallback(BaseCallback):
                 obs = self.model.env.reset()
                 done = False
                 steps = 75
-                while not done or steps > 0:
+                while not done and steps > 0:
                     action, _states = self.model.predict(obs, deterministic=True)
                     obs, reward, done, info = self.model.env.step(action)
                     steps -= 1
                     if done:
-                        if reward >= 100:
-                            model_performance += 100 / steps
+                        if reward >= 50:
+                            model_performance += 100 / (steps + 1)
             if model_performance > self.best_result:
+                self.config['model_performance'] = model_performance
                 self.best_result = model_performance
                 self.model.save(self.config['folder_path_for_models']+ '/' +self.config['model_name'] + '-best')
                 file_name = self.config['folder_path_for_models'] + '/' + self.config['model_name']+ '-best' + '.json'
                 with open(file_name, 'w') as f:
                     json.dump(self.config, f)
-            wandb.log({'model_performance': model_performance})
+                wandb.log({'model_performance': model_performance})
             print(f"Model performance: {model_performance}")
         return True
               
@@ -446,7 +447,7 @@ config_dict = {
 
 def toneParams(tries = 100):
     best_params = {}
-    best_result = 0
+    best_result = -np.inf
     best_model = None
     for _ in range(tries):
         config_dict = generate_random_params()
@@ -464,58 +465,60 @@ def toneParams(tries = 100):
                 env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
                 env.reset()
                 model = DQN("MlpPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
-        model.learn(total_timesteps=100_000 , progress_bar=True , callback=CustomCallback(eval_freq=10_000 , config_dict=config_dict))
+        model.learn(total_timesteps=100_000 , progress_bar=True , callback=CustomCallback(eval_freq=2_500 , config_dict=config_dict))
         model_performance = 0
         for _ in range(10):
             obs = model.env.reset()
             done = False
             steps = 75
-            while not done or steps <= 0:
+            while not done and steps > 0:
                 action, _states = model.predict(obs, deterministic=True)
                 obs, reward, done, info = model.env.step(action)
                 steps -= 1
                 if done:
-                    if reward >= 100:
-                        model_performance += 75 / steps
+                    if reward >= 50:
+                        model_performance += 100 / (steps + 1)
         if model_performance > best_result:
             best_result = model_performance
+            config_dict['model_performance'] = model_performance
             best_params = config_dict
             best_model = model
+        wandb.finish()
     return best_params , best_model
 
 
 
 # NOTE: uncomment the following line to run the toneParams function
-# best_params , best_model = toneParams()
-# best_model.save(best_params['folder_path_for_models'] + '/' + best_params['model_name']+ '-best-tone')
-# file_name = best_params['folder_path_for_models'] + '/' + best_params['model_name']+'-best-tone'+'.json'
-# with open(file_name, 'w') as f:
-#     json.dump(best_params, f)
+best_params , best_model = toneParams()
+best_model.save(best_params['folder_path_for_models'] + '/' + best_params['model_name']+ '-best-tone')
+file_name = best_params['folder_path_for_models'] + '/' + best_params['model_name']+'-best-tone'+'.json'
+with open(file_name, 'w') as f:
+    json.dump(best_params, f)
 
 
-wandb.init(project="sokoban-0.1", config=config_dict , name=config_dict['model_name'])   
+# wandb.init(project="sokoban-0.1", config=config_dict , name=config_dict['model_name'])   
 
 
 
-if config_dict['model_type'] == 'PPO':
-    env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
-    env.reset()
-    model = PPO("MlpPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch']) , batch_size=config_dict['batch_size'])
-elif config_dict['model_type'] == 'DQN':
-    if config_dict['policy'] == 'CnnPolicy':
-        env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset'] , complex=False))
-        env.reset()
-        model = DQN("CnnPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
-    # NOTE: Maybe try different policy types but for CnnPolicy we need to change the observation space
-    # TODO: try more experiments with CnnPolicy and study more about it
-    else:
-        env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
-        env.reset()
-        model = DQN("MlpPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
-    # NOTE: DQN models are probably better
-    # TODO: try more experiments with DQN models
+# if config_dict['model_type'] == 'PPO':
+#     env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
+#     env.reset()
+#     model = PPO("MlpPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch']) , batch_size=config_dict['batch_size'])
+# elif config_dict['model_type'] == 'DQN':
+#     if config_dict['policy'] == 'CnnPolicy':
+#         env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset'] , complex=False))
+#         env.reset()
+#         model = DQN("CnnPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
+#     # NOTE: Maybe try different policy types but for CnnPolicy we need to change the observation space
+#     # TODO: try more experiments with CnnPolicy and study more about it
+#     else:
+#         env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
+#         env.reset()
+#         model = DQN("MlpPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
+#     # NOTE: DQN models are probably better
+#     # TODO: try more experiments with DQN models
     
-model.learn(total_timesteps=1_000_000 , progress_bar=True , callback=CustomCallback(eval_freq=10_000 , config_dict=config_dict))
+# model.learn(total_timesteps=1_000_000 , progress_bar=True , callback=CustomCallback(eval_freq=10_000 , config_dict=config_dict))
 
 
 #  TODO: create function for loading and evaluation of the model
