@@ -80,7 +80,7 @@ class Game():
             map[cord[1]][cord[0]] = self.final_char
         return '\n'.join([' '.join(row) for row in map])
     
-    def show_map(self):
+    def show_map(self, show = 'human'):
         map  = [['.' for _ in range(self.map_size[0])] for _ in range(self.map_size[1])]
         map[self.y][self.x] = 'X'
         for cord in self.box_cords:
@@ -89,7 +89,10 @@ class Game():
             map[cord[1]][cord[0]] = '#'
         for cord in self.final_cords:
             map[cord[1]][cord[0]] = '$'
-        return '\n'.join([' '.join(row) for row in map])
+        if show == 'human':
+            return '\n'.join([' '.join(row) for row in map])
+        return map
+        
     
     def __repr__(self):
         return self.__str__()
@@ -217,11 +220,18 @@ class Game():
         
     
     def check_win(self):
-        box_x , box_y = self.box_cords[0]
-        final_x , final_y = self.final_cords[0]
-        if box_x == final_x and box_y == final_y:
-            return True
-        return False
+        for box_cord in self.box_cords:
+            box_x , box_y = box_cord
+            for final_cord in self.final_cords:
+                final_x , final_y = final_cord
+                if box_x != final_x or box_y != final_y:
+                    return False
+        return True
+        # box_x , box_y = self.box_cords[0]
+        # final_x , final_y = self.final_cords[0]
+        # if box_x == final_x and box_y == final_y:
+        #     return True
+        # return False
 
 def load_function_from_json(folder_path = 'maps'):
     files = [f for f in os.listdir(folder_path) if f.endswith('.json')]
@@ -256,14 +266,12 @@ def load_function_from_json(folder_path = 'maps'):
 #     print(game)
     
 class Env(gym.Env):
-    def __init__(self , map_size = (20, 20) , reset_step = 2500 , max_invalid_move_reset = 100):
+    def __init__(self , map_size = (20, 20) , reset_step = 2500 , max_invalid_move_reset = 100 , config_dict = {} , logging = True):
         self.game = Game(player_x=3, player_y=6, player_char=1, wall_char=2, empty_char=0, box_char=3, final_char=4 , map_size=map_size)
         self.action_space = spaces.Discrete(4)
-        # self.complex = complex
-        # if self.complex:
         self.observation_space = spaces.Box(low=0, high=4, shape=(8, 10, 10 ), dtype=np.float32)
-        # else:
-        #     self.observation_space = spaces.Box(low=0, high=4, shape=(10, 10), dtype=np.float32)
+        self.config_dict = config_dict
+        self.logging = logging
         self.map_size = map_size
         self.current_step = 0
         self.reset_step = reset_step
@@ -281,35 +289,36 @@ class Env(gym.Env):
         self.current_step += 1
         
         if self.current_step > self.reset_step or self.max_invalid_move_reset == 0:
-            return self.reset(), 0, False, {}
+            return self.reset(), 0, True, {}
         
         if not valid_move:
             self.max_invalid_move_reset -= 1
-            if self.current_step % 2 == 0:
-                wandb.log({"reward": config_dict["invalid_move_reward"],
+            if self.current_step % 2 == 0 and self.logging:
+                wandb.log({"reward": self.config_dict["invalid_move_reward"],
                         'valid_move': 0,
                         "box_final_distance": self.game.calculate_distance(self.game.box_cords[0][0], self.game.box_cords[0][1], self.game.final_cords[0][0], self.game.final_cords[0][1]),
                         "box_player_distance": self.game.calculate_distance(self.game.box_cords[0][0], self.game.box_cords[0][1], self.game.x, self.game.y),
                         "final_player_distance": self.game.calculate_distance(self.game.final_cords[0][0], self.game.final_cords[0][1], self.game.x, self.game.y),
                         })
-            return self.game.return_map_3d_array(), config_dict["invalid_move_reward"], False, {}
+            return self.game.return_map_3d_array(), self.config_dict["invalid_move_reward"], False, {}
         
         if self.game.check_win():
+            if self.logging:
+                wandb.log({
+                    "reward": self.config_dict["win_reward"],
+                    'valid_move': 1,
+                    'box_final_distance': 0,
+                })
             print('win')
-            wandb.log({
-                "reward": config_dict["win_reward"],
-                'valid_move': 1,
-                'box_final_distance': 0,
-            })
-            return self.reset(), config_dict["win_reward"], True, {}
+            return self.reset(), self.config_dict["win_reward"], True, {}
         
         if valid_move:
             
-            reward = config_dict["preform_step"]
+            reward = self.config_dict["preform_step"]
             new_x, new_y = self.game.box_cords[0]
             
             if new_x != old_x or new_y != old_y:
-                reward += config_dict["box_move_reward"]
+                reward += self.config_dict["box_move_reward"]
                 
             new_player_x , new_player_y = self.game.x , self.game.y
             
@@ -317,27 +326,27 @@ class Env(gym.Env):
             new_distance = self.game.calculate_distance(new_player_x, new_player_y, self.game.box_cords[0][0], self.game.box_cords[0][1])
                 
             if old_distance > new_distance:
-                reward += config_dict["box_player_reward"]
+                reward += self.config_dict["box_player_reward"]
             
             old_distance = self.game.calculate_distance(old_x, old_y, self.game.final_cords[0][0], self.game.final_cords[0][1])
             new_distance = self.game.calculate_distance(new_x, new_y, self.game.final_cords[0][0], self.game.final_cords[0][1])
             
             if old_distance > new_distance:
-                reward += config_dict["box_goal_reward"]
+                reward += self.config_dict["box_goal_reward"]
                 
             if new_distance < 1.5:
-                reward += config_dict["box_near_goal"]
+                reward += self.config_dict["box_near_goal"]
                 
             if new_distance < 3:
-                reward += config_dict["box_close_goal"]
+                reward += self.config_dict["box_close_goal"]
                 
             old_distance = self.game.calculate_distance(old_player_x, old_player_y, self.game.final_cords[0][0], self.game.final_cords[0][1])
             new_distance = self.game.calculate_distance(new_player_x, new_player_y, self.game.final_cords[0][0], self.game.final_cords[0][1])
             
             if old_distance > new_distance:
-                reward += config_dict["final_player_reward"]
+                reward += self.config_dict["final_player_reward"]
                 
-            if self.current_step % 20 == 0:
+            if self.current_step % 20 == 0 and self.logging:
                 wandb.log({ "reward": reward,
                             'valid_move': 1,
                             "box_final_distance": self.game.calculate_distance(new_x, new_y, self.game.final_cords[0][0], self.game.final_cords[0][1]),
@@ -350,15 +359,15 @@ class Env(gym.Env):
     def reset(self):
         walls , player_x , player_y , box , goals = load_function_from_json()
         self.current_step = 0
-        self.max_invalid_move_reset = config_dict["max_invalid_move_reset"]
+        self.max_invalid_move_reset = self.config_dict["max_invalid_move_reset"]
 
         self.game = Game(player_x=player_x, player_y=player_y, player_char=1, wall_char=2, empty_char=0, box_char=3, final_char=4, wall_cords=walls, final_cords=[goals], box_cords=[box] , map_size=self.map_size, path_char=5)
         new_map = self.game.return_map_3d_array()
         return np.array(new_map)
 
-    def render(self):
-        # print(self.game)
-        print(self.game.show_map())
+    def render(self , mode='human'):
+        return self.game.show_map(show=mode) , self.game.box_cords[0] , self.game.final_cords[0]
+    
       
 class CustomCallback(BaseCallback):
     def __init__(self, verbose=0 , eval_freq = 1000 , config_dict = {}):
@@ -422,28 +431,7 @@ def generate_random_params():
         'folder_path_for_models': 'models-tone',
     }
             
-config_dict = {
-    'learning_rate': 0.001,
-    'net_arch': {'pi': [512,512,256,128], 'vf': [512,512,256,128]},
-    'net_arch_dqn': [1024, 1024, 1024 ,256],
-    'batch_size': 128,
-    'model_name': generate_model_name(),
-    'map_size': (10, 10),
-    'reset': 100,
-    'box_near_goal': 0.0,
-    'box_close_goal' : 0.0,
-    'box_move_reward': 0.0,
-    'box_goal_reward': 0.0,
-    'box_player_reward': 0.0,
-    'final_player_reward': 0.0,
-    'preform_step' : -0.5,
-    'win_reward': 100,
-    'invalid_move_reward': -10,
-    'max_invalid_move_reset': 10,
-    'model_type': 'DQN',
-    'policy': 'MlpPolicy',
-    'folder_path_for_models': 'models',
-}
+
 
 def toneParams(tries = 100):
     best_params = {}
@@ -489,39 +477,97 @@ def toneParams(tries = 100):
 
 
 # NOTE: uncomment the following line to run the toneParams function
-best_params , best_model = toneParams()
-best_model.save(best_params['folder_path_for_models'] + '/' + best_params['model_name']+ '-best-tone')
-file_name = best_params['folder_path_for_models'] + '/' + best_params['model_name']+'-best-tone'+'.json'
-with open(file_name, 'w') as f:
-    json.dump(best_params, f)
+# best_params , best_model = toneParams()
+# best_model.save(best_params['folder_path_for_models'] + '/' + best_params['model_name']+ '-best-tone')
+# file_name = best_params['folder_path_for_models'] + '/' + best_params['model_name']+'-best-tone'+'.json'
+# with open(file_name, 'w') as f:
+#     json.dump(best_params, f)
 
+
+# config_dict = {
+#     'learning_rate': 0.01,
+#     'net_arch': {'pi': [512,512], 'vf': [1024,1024,512,512]},
+#     'net_arch_dqn': [1024, 1024, 1024, 512],
+#     'batch_size': 70,
+#     'model_name': generate_model_name(),
+#     'map_size': (10, 10),
+#     'reset': 116,
+#     'box_near_goal': 0.69,
+#     'box_close_goal' : 0.56,
+#     'box_move_reward': -0.01,
+#     'box_goal_reward': -0.10,
+#     'box_player_reward': -0.2,
+#     'final_player_reward': -0.02,
+#     'preform_step' : -0.17,
+#     'win_reward': 145.1,
+#     'invalid_move_reward': -9.69,
+#     'max_invalid_move_reset': 8.2,
+#     'model_type': 'DQN',
+#     'policy': 'MlpPolicy',
+#     'folder_path_for_models': 'models',
+# }
 
 # wandb.init(project="sokoban-0.1", config=config_dict , name=config_dict['model_name'])   
-
 
 
 # if config_dict['model_type'] == 'PPO':
 #     env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
 #     env.reset()
-#     model = PPO("MlpPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch']) , batch_size=config_dict['batch_size'])
+#     model = PPO("MlpPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch']) , batch_size=config_dict['batch_size'])
 # elif config_dict['model_type'] == 'DQN':
 #     if config_dict['policy'] == 'CnnPolicy':
 #         env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset'] , complex=False))
 #         env.reset()
-#         model = DQN("CnnPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
+#         model = DQN("CnnPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
 #     # NOTE: Maybe try different policy types but for CnnPolicy we need to change the observation space
 #     # TODO: try more experiments with CnnPolicy and study more about it
 #     else:
 #         env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
 #         env.reset()
-#         model = DQN("MlpPolicy", env, verbose=1 , learning_rate=0.001, policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
+#         model = DQN("MlpPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
 #     # NOTE: DQN models are probably better
 #     # TODO: try more experiments with DQN models
     
-# model.learn(total_timesteps=1_000_000 , progress_bar=True , callback=CustomCallback(eval_freq=10_000 , config_dict=config_dict))
+# model.learn(total_timesteps=5_000_000 , progress_bar=True , callback=CustomCallback(eval_freq=2_500 , config_dict=config_dict))
 
 
-#  TODO: create function for loading and evaluation of the model
+def test_model(model_path='models/model-1709509845-best.zip', config_file='models/model-1709509845-best.json'):
+    with open(config_file) as f:
+        config_dict = json.load(f)
+    env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset'] , config_dict , logging=False))
+    if config_dict['model_type'] == 'PPO':
+        model = PPO.load(model_path)
+        model.set_env(env)
+    elif config_dict['model_type'] == 'DQN':
+        model = DQN.load(model_path)
+        model.set_env(env)
+    model_performance = 0
+    model_data = []
+    win_count = 0
+    for i in range(10):
+        obs = model.env.reset()
+        maps = []
+        done = False
+        steps = 75
+        while not done and steps > 0:
+            action, _states = model.predict(obs, deterministic=True)
+            # print(model.env.render())
+            maps.append(model.env.render())
+            obs, reward, done, info = model.env.step(action)
+            steps -= 1
+            if done:
+                if reward >= 50:
+                    model_performance += 100 / (steps + 1)
+                    win_count += 1
+                    maps.append('win')
+        model_data.append(maps)
+    print(f"Model performance: {model_performance}" , f"Win count: {(win_count / 10) * 100}%")
+    for data in model_data:
+        if data[-1] == 'win':
+            for i in range(len(data)):
+                print(data[i][0])
+    return model_performance , model_data
 
+test_model()
     
    

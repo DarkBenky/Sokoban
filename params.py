@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 from app import get_data
 import numpy as np
 from scipy.optimize import minimize
+from sklearn.preprocessing import StandardScaler
+import joblib
 
 # Load data
 df = get_data('models-tone')
@@ -40,8 +42,9 @@ print('X_train:', X_train)
 print('X_train:', X_train.shape)
 
 # Normalize the target variable
-# scaler = StandardScaler()
-# y_train_scaled = scaler.fit_transform(y_train.values.reshape(-1, 1))
+scaler = StandardScaler()
+y_train_scaled = scaler.fit_transform(y_train.values.reshape(-1, 1))
+y_test_scaled = scaler.transform(y_test.values.reshape(-1, 1))
 
 # joblib.dump(scaler, 'scaler.pkl')
 
@@ -49,25 +52,24 @@ print('X_train:', X_train.shape)
 param_grid = {
     'n_estimators': [100, 200, 300, 400, 500],
     'max_features': ['sqrt', 'log2', None],
-    'max_depth': [10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+    'max_depth': [10, 20, 30, 40, 50, 60, 70],
     'criterion': ['friedman_mse', 'squared_error', 'poisson', 'absolute_error']
 }
 
 # Train the model with GridSearchCV
-grid_search = GridSearchCV(RandomForestRegressor(), param_grid, cv=5, scoring='neg_mean_squared_error', n_jobs=-1, verbose=1)
-grid_search.fit(X_train, y_train)
+grid_search = GridSearchCV(RandomForestRegressor(), param_grid, cv=5, scoring='neg_mean_squared_error', n_jobs=-1, verbose=0)
+grid_search.fit(X_train, y_train_scaled)
 
 # evaluate the model
-y_pred = grid_search.predict(X_test)
-mse = mean_squared_error(y_test, y_pred)
-print("MSE:", mse)
-accuracy = grid_search.score(X_test, y_test)
-print("Accuracy:", accuracy)
+accuracy = grid_search.score(X_test, y_test_scaled)
+print('Accuracy:', accuracy)
 
 def objective(params, model):
     params_reshaped = np.array(params)
     # reshape to 2D array
     params_reshaped = params_reshaped.reshape(1, -1)
+
+    # params_reshaped = scaler.transform(params_reshaped)
 
     # Predict the performance using the model
     predicted_performance = model.predict(params_reshaped)
@@ -86,18 +88,21 @@ initial_params = np.zeros(X_train.shape[1])
 # Perform the minimization to find the best parameters
 result = minimize(objective, initial_params, args=(best_model), method='Powell')
 
-# Get the best parameters
 best_params = result.x
 
 # Scale the best parameters using the loaded scaler
 best_params_reshaped = np.array(best_params).reshape(1, -1)
-# best_params_scaled = loaded_scaler.transform(best_params_reshaped)
 
 # Predict the performance using the best model
 predicted_performance = best_model.predict(best_params_reshaped)
 
-new_df = pd.DataFrame(best_params_reshaped, columns=X_train.columns)
-print("Best Parameters:", new_df)
+# Unscaled the best parameters
+best_params_unscaled = scaler.inverse_transform(best_params_reshaped)
+
+new_df = pd.DataFrame(best_params_unscaled, columns=X_train.columns)
+print("Best Parameters (Unscaled):", new_df)
 
 print("Predicted Performance:", predicted_performance[0])
+
+# TODO: fix it all
 
