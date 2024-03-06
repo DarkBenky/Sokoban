@@ -1,0 +1,23 @@
+{
+	"learning_rate": 0.009826621856551672,
+	"net_arch": { "pi": [716], "vf": [586, 618, 893, 873, 521] },
+	"net_arch_dqn": [821, 456],
+	"batch_size": 256,
+	"model_name": "model-1709622184",
+	"map_size": [10, 10],
+	"reset": 99,
+	"box_near_goal": 0.2390278600591741,
+	"box_close_goal": 0.9122382658066216,
+	"box_move_reward": -0.9056847398815764,
+	"box_goal_reward": 0.4886755672107548,
+	"box_player_reward": 0.32372905279325437,
+	"final_player_reward": 0.842557946199807,
+	"preform_step": -0.5011660022011364,
+	"win_reward": 55,
+	"invalid_move_reward": -2.6999524039493785,
+	"no_win_reward": -19.55137615687345,
+	"model_type": "DQN",
+	"policy": "MlpPolicy",
+	"folder_path_for_models": "models-tone",
+	"model_performance": 4.270315091210614
+}

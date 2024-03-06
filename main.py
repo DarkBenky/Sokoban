@@ -146,7 +146,7 @@ class Game():
         
               
     
-    def return_map_3d_array(self):
+    def return_map_3d_array(self , complex_map = True):
         
         # path = self.find_path_to_goal()
         
@@ -176,7 +176,7 @@ class Game():
             final_map[cord[1]][cord[0]] = self.final_char
             full_map[cord[1]][cord[0]] = 4
             
-        if complex:
+        if complex_map:
             return [full_map , player_map, box_map, wall_map, final_map , distance_box_final , distance_box_player , distance_final_player]
         return full_map
     
@@ -266,103 +266,107 @@ def load_function_from_json(folder_path = 'maps'):
 #     print(game)
     
 class Env(gym.Env):
-    def __init__(self , map_size = (20, 20) , reset_step = 2500 , max_invalid_move_reset = 100 , config_dict = {} , logging = True):
+    def __init__(self , map_size = (20, 20) , reset_step = 2500 , logging = True , complex_map = False , reset_after_invalid_move = 10):
         self.game = Game(player_x=3, player_y=6, player_char=1, wall_char=2, empty_char=0, box_char=3, final_char=4 , map_size=map_size)
         self.action_space = spaces.Discrete(4)
-        self.observation_space = spaces.Box(low=0, high=4, shape=(8, 10, 10 ), dtype=np.float32)
-        self.config_dict = config_dict
+        if complex_map:
+            self.observation_space = spaces.Box(low=0, high=4, shape=(8, 10, 10 ), dtype=np.float32)
+        else:
+            self.observation_space = spaces.Box(low=0, high=4, shape=(1, 10, 10 ), dtype=np.float32)
         self.logging = logging
         self.map_size = map_size
         self.current_step = 0
         self.reset_step = reset_step
-        self.max_invalid_move_reset = max_invalid_move_reset
+        self.complex_map = complex_map
+        self.reset_after_invalid_move = reset_after_invalid_move
 
     def step(self, action):
-        action = ['up', 'down', 'left', 'right'][action]
+        action = ['up', 'down', 'left', 'right'][action]  # Convert the action index to a corresponding action string
         
-        old_player_x , old_player_y = self.game.x , self.game.y
-        old_x, old_y = self.game.box_cords[0]
-        # distance_box_final , distance_box_player , distance_final_player = self.game.generate_heatmap()
+        old_player_x, old_player_y = self.game.x, self.game.y  # Store the current player position
+        old_x, old_y = self.game.box_cords[0]  # Store the current box position
         
-        valid_move = self.game.move(action)
+        valid_move = self.game.move(action)  # Perform the move and check if it is a valid move
         
-        self.current_step += 1
+        self.current_step += 1  # Increment the current step counter
         
-        if self.current_step > self.reset_step or self.max_invalid_move_reset == 0:
-            return self.reset(), 0, True, {}
+        if self.current_step > self.reset_step or self.reset_after_invalid_move <= 0:
+            return self.reset(), config_dict['no_win_reward'], True, {}  # If the maximum number of steps is reached, reset the environment and return a no-win reward
         
         if not valid_move:
-            self.max_invalid_move_reset -= 1
-            if self.current_step % 2 == 0 and self.logging:
-                wandb.log({"reward": self.config_dict["invalid_move_reward"],
-                        'valid_move': 0,
-                        "box_final_distance": self.game.calculate_distance(self.game.box_cords[0][0], self.game.box_cords[0][1], self.game.final_cords[0][0], self.game.final_cords[0][1]),
-                        "box_player_distance": self.game.calculate_distance(self.game.box_cords[0][0], self.game.box_cords[0][1], self.game.x, self.game.y),
-                        "final_player_distance": self.game.calculate_distance(self.game.final_cords[0][0], self.game.final_cords[0][1], self.game.x, self.game.y),
-                        })
-            return self.game.return_map_3d_array(), self.config_dict["invalid_move_reward"], False, {}
+            self.reset_after_invalid_move -= 1  # Decrement the number of invalid moves left before resetting the environment
+            if self.logging:
+                wandb.log({
+                    "reward": config_dict["invalid_move_reward"],
+                    'valid_move': 0,
+                    'box_final_distance': self.game.calculate_distance(self.game.box_cords[0][0], self.game.box_cords[0][1], self.game.final_cords[0][0], self.game.final_cords[0][1]),
+                })  # Log the reward, valid move flag, and box-final distance if the move is invalid
+            return  self.game.return_map_3d_array(self.complex_map), config_dict["invalid_move_reward"], False, {}  # Reset the environment and return an invalid move reward
         
         if self.game.check_win():
             if self.logging:
                 wandb.log({
-                    "reward": self.config_dict["win_reward"],
+                    "reward": config_dict["win_reward"],
                     'valid_move': 1,
                     'box_final_distance': 0,
-                })
+                })  # Log the reward, valid move flag, and box-final distance if the game is won
             print('win')
-            return self.reset(), self.config_dict["win_reward"], True, {}
+            return self.reset(), config_dict["win_reward"], True, {}  # Reset the environment and return a win reward
         
         if valid_move:
-            
-            reward = self.config_dict["preform_step"]
+            reward = config_dict["preform_step"]
             new_x, new_y = self.game.box_cords[0]
             
+            # If the box has moved, add the box move reward to the total reward.
             if new_x != old_x or new_y != old_y:
-                reward += self.config_dict["box_move_reward"]
+                reward += config_dict["box_move_reward"]
                 
-            new_player_x , new_player_y = self.game.x , self.game.y
+            new_player_x, new_player_y = self.game.x, self.game.y
             
+            # Calculate the distances before and after the move for the box and the player.
             old_distance = self.game.calculate_distance(old_player_x, old_player_y, self.game.box_cords[0][0], self.game.box_cords[0][1])
             new_distance = self.game.calculate_distance(new_player_x, new_player_y, self.game.box_cords[0][0], self.game.box_cords[0][1])
                 
+            # If the player has moved closer to the box, add the box player reward to the total reward.
             if old_distance > new_distance:
-                reward += self.config_dict["box_player_reward"]
+                reward += config_dict["box_player_reward"]
             
             old_distance = self.game.calculate_distance(old_x, old_y, self.game.final_cords[0][0], self.game.final_cords[0][1])
             new_distance = self.game.calculate_distance(new_x, new_y, self.game.final_cords[0][0], self.game.final_cords[0][1])
             
+            # If the box has moved closer to the goal, add the box goal reward to the total reward.
             if old_distance > new_distance:
-                reward += self.config_dict["box_goal_reward"]
+                reward += config_dict["box_goal_reward"]
                 
+            # If the box is near the goal, add the box near goal reward to the total reward.
             if new_distance < 1.5:
-                reward += self.config_dict["box_near_goal"]
+                reward += config_dict["box_near_goal"]
                 
+            # If the box is close to the goal, add the box close goal reward to the total reward.
             if new_distance < 3:
-                reward += self.config_dict["box_close_goal"]
+                reward += config_dict["box_close_goal"]
                 
             old_distance = self.game.calculate_distance(old_player_x, old_player_y, self.game.final_cords[0][0], self.game.final_cords[0][1])
             new_distance = self.game.calculate_distance(new_player_x, new_player_y, self.game.final_cords[0][0], self.game.final_cords[0][1])
             
+            # If the player has moved closer to the goal, add the final player reward to the total reward.
             if old_distance > new_distance:
-                reward += self.config_dict["final_player_reward"]
+                reward += config_dict["final_player_reward"]
                 
-            if self.current_step % 20 == 0 and self.logging:
+            if self.current_step % 2 == 0 and self.logging:
                 wandb.log({ "reward": reward,
                             'valid_move': 1,
                             "box_final_distance": self.game.calculate_distance(new_x, new_y, self.game.final_cords[0][0], self.game.final_cords[0][1]),
-                            "box_player_distance": self.game.calculate_distance(new_x, new_y, self.game.x, self.game.y),
-                            "final_player_distance": self.game.calculate_distance(self.game.final_cords[0][0], self.game.final_cords[0][1], self.game.x, self.game.y),
                         })
-            return self.game.return_map_3d_array(), reward, False, {}
+            return self.game.return_map_3d_array(self.complex_map), reward, False, {}
 
 
     def reset(self):
         walls , player_x , player_y , box , goals = load_function_from_json()
         self.current_step = 0
-        self.max_invalid_move_reset = self.config_dict["max_invalid_move_reset"]
-
+        self.reset_after_invalid_move = config_dict['max_invalid_move_reset']
         self.game = Game(player_x=player_x, player_y=player_y, player_char=1, wall_char=2, empty_char=0, box_char=3, final_char=4, wall_cords=walls, final_cords=[goals], box_cords=[box] , map_size=self.map_size, path_char=5)
-        new_map = self.game.return_map_3d_array()
+        new_map = self.game.return_map_3d_array(self.complex_map)
         return np.array(new_map)
 
     def render(self , mode='human'):
@@ -382,7 +386,7 @@ class CustomCallback(BaseCallback):
             for _ in range(10):
                 obs = self.model.env.reset()
                 done = False
-                steps = 75
+                steps = 100
                 while not done and steps > 0:
                     action, _states = self.model.predict(obs, deterministic=True)
                     obs, reward, done, info = self.model.env.step(action)
@@ -409,10 +413,10 @@ def generate_model_name():
 def generate_random_params():
     return {
         'learning_rate': random.uniform(0.0001, 0.1),
-        'net_arch': {'pi': [random.randint(64, 1024) for _ in range(random.randint(1, 5))],
-                     'vf': [random.randint(64, 1024) for _ in range(random.randint(1, 5))]},
-        'net_arch_dqn': [random.randint(64, 1024) for _ in range(random.randint(1, 5))],
-        'batch_size': random.choice([32, 64, 128, 256]),
+        'net_arch': {'pi': [random.randint(1024, 4096) for _ in range(random.randint(4, 7))],
+                     'vf': [random.randint(1024, 4096) for _ in range(random.randint(4, 7))]},
+        'net_arch_dqn': [random.randint(1024, 4096) for _ in range(random.randint(4, 7))],
+        'batch_size': random.choice([32, 64, 128, 256, 512, 1024, 2048]),
         'model_name': generate_model_name(),
         'map_size': (10, 10),
         'reset': random.randint(50, 200),
@@ -424,11 +428,13 @@ def generate_random_params():
         'final_player_reward': random.uniform(-1.0, 1.0),
         'preform_step': random.uniform(-1.0, 1.0),
         'win_reward': random.randint(50, 200),
-        'invalid_move_reward': random.uniform(-20.0, 0.0),
-        'max_invalid_move_reset': random.randint(5, 20),
+        'invalid_move_reward': random.uniform(-10.0, 0.0),
+        'no_win_reward': random.uniform(-2.5, 0.0),
         'model_type': random.choice(['PPO', 'DQN']),
         'policy': random.choice(['MlpPolicy']),
-        'folder_path_for_models': 'models-tone',
+        'folder_path_for_models': 'models-tone-complex-2',
+        'complex_map': random.choice([True, False]),
+        'max_invalid_move_reset': random.uniform(5.0, 20.0),
     }
             
 
@@ -438,22 +444,24 @@ def toneParams(tries = 100):
     best_result = -np.inf
     best_model = None
     for _ in range(tries):
+        global config_dict
         config_dict = generate_random_params()
-        wandb.init(project="sokoban-tone", config=config_dict , name=config_dict['model_name'])
-        env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
-        env.reset()
+        wandb.init(project="sokoban-tone-complex", config=config_dict , name=config_dict['model_name'])
+        
         if config_dict['model_type'] == 'PPO':
+            env = Monitor(Env(config_dict['map_size'], config_dict['reset'], logging=True , complex_map=config_dict['complex_map'], reset_after_invalid_move=config_dict['max_invalid_move_reset']))
+            env.reset()
             model = PPO("MlpPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch']) , batch_size=config_dict['batch_size'])
         elif config_dict['model_type'] == 'DQN':
             if config_dict['policy'] == 'CnnPolicy':
-                env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset'] , complex=False))
+                env = Monitor(Env(config_dict['map_size'], config_dict['reset'], logging=True , complex_map=config_dict['complex_map'] , reset_after_invalid_move=config_dict['max_invalid_move_reset']))
                 env.reset()
                 model = DQN("CnnPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
             else:
-                env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
+                env = Monitor(Env(config_dict['map_size'], config_dict['reset'], logging=True , complex_map=config_dict['complex_map'] , reset_after_invalid_move=config_dict['max_invalid_move_reset']))
                 env.reset()
                 model = DQN("MlpPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
-        model.learn(total_timesteps=100_000 , progress_bar=True , callback=CustomCallback(eval_freq=2_500 , config_dict=config_dict))
+        model.learn(total_timesteps=150_000 , progress_bar=True , callback=CustomCallback(eval_freq=2_500 , config_dict=config_dict))
         model_performance = 0
         for _ in range(10):
             obs = model.env.reset()
@@ -477,11 +485,11 @@ def toneParams(tries = 100):
 
 
 # NOTE: uncomment the following line to run the toneParams function
-# best_params , best_model = toneParams()
-# best_model.save(best_params['folder_path_for_models'] + '/' + best_params['model_name']+ '-best-tone')
-# file_name = best_params['folder_path_for_models'] + '/' + best_params['model_name']+'-best-tone'+'.json'
-# with open(file_name, 'w') as f:
-#     json.dump(best_params, f)
+best_params , best_model = toneParams()
+best_model.save(best_params['folder_path_for_models'] + '/' + best_params['model_name']+ '-best-tone')
+file_name = best_params['folder_path_for_models'] + '/' + best_params['model_name']+'-best-tone'+'.json'
+with open(file_name, 'w') as f:
+    json.dump(best_params, f)
 
 
 # config_dict = {
@@ -531,10 +539,11 @@ def toneParams(tries = 100):
 # model.learn(total_timesteps=5_000_000 , progress_bar=True , callback=CustomCallback(eval_freq=2_500 , config_dict=config_dict))
 
 
-def test_model(model_path='models/model-1709509845-best.zip', config_file='models/model-1709509845-best.json'):
+def test_model(model_path='models-tone-complex-2/model-1709678562-best.zip', config_file='models-tone-complex-2/model-1709678562-best.json'):
     with open(config_file) as f:
+        global config_dict
         config_dict = json.load(f)
-    env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset'] , config_dict , logging=False))
+    env = Monitor(Env(config_dict['map_size'], config_dict['reset'], logging=False , complex_map=config_dict['complex_map'], reset_after_invalid_move=config_dict['max_invalid_move_reset']))
     if config_dict['model_type'] == 'PPO':
         model = PPO.load(model_path)
         model.set_env(env)
@@ -548,7 +557,7 @@ def test_model(model_path='models/model-1709509845-best.zip', config_file='model
         obs = model.env.reset()
         maps = []
         done = False
-        steps = 75
+        steps = 100
         while not done and steps > 0:
             action, _states = model.predict(obs, deterministic=True)
             # print(model.env.render())
@@ -559,15 +568,16 @@ def test_model(model_path='models/model-1709509845-best.zip', config_file='model
                 if reward >= 50:
                     model_performance += 100 / (steps + 1)
                     win_count += 1
-                    maps.append('win')
+                    maps.append(['win', [] , []])
         model_data.append(maps)
     print(f"Model performance: {model_performance}" , f"Win count: {(win_count / 10) * 100}%")
     for data in model_data:
-        if data[-1] == 'win':
             for i in range(len(data)):
                 print(data[i][0])
+                print("box position: ",data[i][1])
+                print("final position: ",data[i][2])
     return model_performance , model_data
 
-test_model()
+# test_model()
     
    

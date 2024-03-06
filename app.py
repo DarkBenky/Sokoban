@@ -35,7 +35,7 @@ def scater_chart(df):
                 "preform_step",
                 "win_reward",
                 "invalid_move_reward",
-                "max_invalid_move_reset",
+                "no_win_reward",
                 "model_type",
                 "model_performance",
         ]
