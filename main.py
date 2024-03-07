@@ -11,6 +11,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import BaseCallback
 from queue import PriorityQueue
 import json
+from path import pathfinder
 
 class Game():
     def __init__(self, player_x, player_y, player_char='X', wall_char='#', empty_char='.', box_char='O', final_char='$', final_cords=[(3, 3)],
@@ -27,6 +28,8 @@ class Game():
         self.final_cords = final_cords
         self.wall_cords = wall_cords
         self.map_size = map_size
+        self.full_map = []
+        self.full_map_path = []
 
     def move(self, direction) -> bool:
         def convert_direction(direction):
@@ -81,17 +84,38 @@ class Game():
         return '\n'.join([' '.join(row) for row in map])
     
     def show_map(self, show = 'human'):
-        map  = [['.' for _ in range(self.map_size[0])] for _ in range(self.map_size[1])]
-        map[self.y][self.x] = 'X'
-        for cord in self.box_cords:
-            map[cord[1]][cord[0]] = 'O'
-        for cord in self.wall_cords:
-            map[cord[1]][cord[0]] = '#'
-        for cord in self.final_cords:
-            map[cord[1]][cord[0]] = '$'
         if show == 'human':
-            return '\n'.join([' '.join(row) for row in map])
-        return map
+            map_  = [['.' for _ in range(self.map_size[0])] for _ in range(self.map_size[1])]
+            map_[self.x][self.y] = 'X'
+            for cord in self.box_cords:
+                map_[cord[1]][cord[0]] = 'O'
+            for cord in self.wall_cords:
+                map_[cord[1]][cord[0]] = '#'
+            for cord in self.final_cords:
+                map_[cord[1]][cord[0]] = '$'
+                return '\n'.join([' '.join(row) for row in map_])
+        elif show == 'array':
+            map_  = [[0 for _ in range(self.map_size[0])] for _ in range(self.map_size[1])]
+            map_[self.x][self.y] = 1
+            for cord in self.box_cords:
+                map_[cord[1]][cord[0]] = 2
+            for cord in self.wall_cords:
+                map_[cord[1]][cord[0]] = 3
+            for cord in self.final_cords:
+                map_[cord[1]][cord[0]] = 4
+            return map_
+        elif show == 'combined':
+            map_  = [['.' for _ in range(self.map_size[0])] for _ in range(self.map_size[1])]
+            map_[self.x][self.y] = 'X'
+            for cord in self.box_cords:
+                map_[cord[1]][cord[0]] = 'O'
+            for cord in self.wall_cords:
+                map_[cord[1]][cord[0]] = '#'
+            for cord in self.final_cords:
+                map_[cord[1]][cord[0]] = '$'
+                return map_
+        else:
+            raise ValueError("Invalid value for show parameter. Expected 'human' or 'array'.")
         
     
     def __repr__(self):
@@ -147,13 +171,6 @@ class Game():
               
     
     def return_map_3d_array(self , complex_map = True):
-        
-        # path = self.find_path_to_goal()
-        
-        # path_map = [[0 for _ in range(self.map_size[0])] for _ in range(self.map_size[1])]
-        # for cord in path:
-        #     path_map[cord[1]][cord[0]] = 1
-        
         distance_box_final , distance_box_player , distance_final_player = self.generate_heatmap()
             
         player_map = [[0 for _ in range(self.map_size[0])] for _ in range(self.map_size[1])]
@@ -175,49 +192,20 @@ class Game():
         for cord in self.final_cords:
             final_map[cord[1]][cord[0]] = self.final_char
             full_map[cord[1]][cord[0]] = 4
+        
+        if complex_map: 
+            path = pathfinder(current_x=self.box_cords[0][0], current_y=self.box_cords[0][1], visited=[(self.box_cords[0][0], self.box_cords[0][1])], finish_x=self.final_cords[0][0], finish_y=self.final_cords[0][1], width=self.map_size[0], height=self.map_size[1], matrix=full_map)
+            full_map_path = full_map.copy()
+            for cord in path:
+                full_map_path[cord[0]][cord[1]] = 5
+            self.full_map_path = full_map_path
             
+        self.full_map = full_map
+        
         if complex_map:
-            return [full_map , player_map, box_map, wall_map, final_map , distance_box_final , distance_box_player , distance_final_player]
+            return [full_map , full_map_path , player_map, box_map, wall_map, distance_box_final , distance_box_player , distance_final_player]
         return full_map
     
-    def find_path_to_goal(self):
-        def heuristic(node, goal):
-            return abs(node[0] - goal[0]) + abs(node[1] - goal[1])
-
-        def get_neighbors(node):
-            x, y = node
-            return [(x+1, y), (x-1, y), (x, y+1), (x, y-1)]
-
-        start = self.box_cords[0]
-        goal = self.final_cords[0]
-
-        open_set = PriorityQueue()
-        open_set.put((0, start, []))  # (priority, node, path)
-
-        closed_set = set()
-
-        while not open_set.empty():
-            _, current, path = open_set.get()
-
-            if current == goal:
-                return path
-
-            if current in closed_set:
-                continue
-            
-            if len(path) > 50:
-                return []
-
-            closed_set.add(current)
-
-            for neighbor in get_neighbors(current):
-                if neighbor not in self.wall_cords and neighbor not in closed_set:
-                    new_path = path + [current]
-                    priority = len(new_path) + heuristic(neighbor, goal)
-                    open_set.put((priority, neighbor, new_path))
-
-        return []  # No path found
-        
     
     def check_win(self):
         for box_cord in self.box_cords:
@@ -233,15 +221,18 @@ class Game():
         #     return True
         # return False
 
-def load_function_from_json(folder_path = 'maps'):
+def load_function_from_json(folder_path = 'maps' , map_name = None):
     files = [f for f in os.listdir(folder_path) if f.endswith('.json')]
 
     if not files:
         raise FileNotFoundError("No JSON files found in the specified folder.")
 
     # Select a random JSON file
-    random_file = random.choice(files)
-    file_path = os.path.join(folder_path, random_file)
+    if map_name != None:
+        file_path = os.path.join(folder_path, map_name)
+    else:
+        random_file = random.choice(files)
+        file_path = os.path.join(folder_path, random_file)
 
     # Load data from the selected file
     data = json.load(open(file_path))
@@ -251,6 +242,8 @@ def load_function_from_json(folder_path = 'maps'):
     player_x, player_y = data.get('player', [0, 0])
     box = data.get('box', [])
     goals = data.get('goals', [])
+    
+    print(f"Loaded map from {file_path}")
 
     return barriers, player_x, player_y, box, goals
 
@@ -284,6 +277,8 @@ class Env(gym.Env):
         action = ['up', 'down', 'left', 'right'][action]  # Convert the action index to a corresponding action string
         
         old_player_x, old_player_y = self.game.x, self.game.y  # Store the current player position
+        if config_dict['complex_map']:
+            path_old = self.game.full_map_path
         old_x, old_y = self.game.box_cords[0]  # Store the current box position
         
         valid_move = self.game.move(action)  # Perform the move and check if it is a valid move
@@ -316,6 +311,9 @@ class Env(gym.Env):
         if valid_move:
             reward = config_dict["preform_step"]
             new_x, new_y = self.game.box_cords[0]
+            
+            if path_old[new_x][new_y] == 5 and config_dict['complex_map']:
+                reward += config_dict["box_moved_on_correct_path_reward"]
             
             # If the box has moved, add the box move reward to the total reward.
             if new_x != old_x or new_y != old_y:
@@ -413,9 +411,9 @@ def generate_model_name():
 def generate_random_params():
     return {
         'learning_rate': random.uniform(0.0001, 0.1),
-        'net_arch': {'pi': [random.randint(1024, 4096) for _ in range(random.randint(4, 7))],
-                     'vf': [random.randint(1024, 4096) for _ in range(random.randint(4, 7))]},
-        'net_arch_dqn': [random.randint(1024, 4096) for _ in range(random.randint(4, 7))],
+        'net_arch': {'pi': [random.randint(256, 2048) for _ in range(random.randint(2, 5))],
+                     'vf': [random.randint(256, 2048) for _ in range(random.randint(2, 5))]},
+        'net_arch_dqn': [random.randint(1024, 4096) for _ in range(random.randint(2, 5))],
         'batch_size': random.choice([32, 64, 128, 256, 512, 1024, 2048]),
         'model_name': generate_model_name(),
         'map_size': (10, 10),
@@ -435,6 +433,7 @@ def generate_random_params():
         'folder_path_for_models': 'models-tone-complex-2',
         'complex_map': random.choice([True, False]),
         'max_invalid_move_reset': random.uniform(5.0, 20.0),
+        'box_moved_on_correct_path_reward': random.uniform(0, 1.0)
     }
             
 
