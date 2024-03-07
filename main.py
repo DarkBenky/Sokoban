@@ -194,10 +194,13 @@ class Game():
             full_map[cord[1]][cord[0]] = 4
         
         if complex_map: 
-            path = pathfinder(current_x=self.box_cords[0][0], current_y=self.box_cords[0][1], visited=[(self.box_cords[0][0], self.box_cords[0][1])], finish_x=self.final_cords[0][0], finish_y=self.final_cords[0][1], width=self.map_size[0], height=self.map_size[1], matrix=full_map)
-            full_map_path = full_map.copy()
-            for cord in path:
-                full_map_path[cord[0]][cord[1]] = 5
+            try:
+                path = pathfinder(current_x=self.box_cords[0][0], current_y=self.box_cords[0][1], visited=[(self.box_cords[0][0], self.box_cords[0][1])], finish_x=self.final_cords[0][0], finish_y=self.final_cords[0][1], width=self.map_size[0], height=self.map_size[1], matrix=full_map)
+                full_map_path = full_map.copy()
+                for cord in path:
+                    full_map_path[cord[0]][cord[1]] = 5
+            except:
+                full_map_path = full_map
             self.full_map_path = full_map_path
             
         self.full_map = full_map
