@@ -487,58 +487,60 @@ def toneParams(tries = 100):
 
 
 # NOTE: uncomment the following line to run the toneParams function
-best_params , best_model = toneParams()
-best_model.save(best_params['folder_path_for_models'] + '/' + best_params['model_name']+ '-best-tone')
-file_name = best_params['folder_path_for_models'] + '/' + best_params['model_name']+'-best-tone'+'.json'
-with open(file_name, 'w') as f:
-    json.dump(best_params, f)
+# best_params , best_model = toneParams()
+# best_model.save(best_params['folder_path_for_models'] + '/' + best_params['model_name']+ '-best-tone')
+# file_name = best_params['folder_path_for_models'] + '/' + best_params['model_name']+'-best-tone'+'.json'
+# with open(file_name, 'w') as f:
+#     json.dump(best_params, f)
 
 
-# config_dict = {
-#     'learning_rate': 0.01,
-#     'net_arch': {'pi': [512,512], 'vf': [1024,1024,512,512]},
-#     'net_arch_dqn': [1024, 1024, 1024, 512],
-#     'batch_size': 70,
-#     'model_name': generate_model_name(),
-#     'map_size': (10, 10),
-#     'reset': 116,
-#     'box_near_goal': 0.69,
-#     'box_close_goal' : 0.56,
-#     'box_move_reward': -0.01,
-#     'box_goal_reward': -0.10,
-#     'box_player_reward': -0.2,
-#     'final_player_reward': -0.02,
-#     'preform_step' : -0.17,
-#     'win_reward': 145.1,
-#     'invalid_move_reward': -9.69,
-#     'max_invalid_move_reset': 8.2,
-#     'model_type': 'DQN',
-#     'policy': 'MlpPolicy',
-#     'folder_path_for_models': 'models',
-# }
+config_dict = {
+    'learning_rate': 0.01,
+    'net_arch': {'pi': [512,512], 'vf': [1024,1024,512,512]},
+    'net_arch_dqn': [1024, 1024, 1024, 512],
+    'batch_size': 128,
+    'model_name': generate_model_name(),
+    'map_size': (10, 10),
+    'reset': 116,
+    'box_near_goal': 0.5,
+    'box_close_goal' : 0.25,
+    'box_move_reward': 0.1,
+    'box_goal_reward': 0.0,
+    'box_player_reward': 0.0,
+    'final_player_reward': 0.0,
+    'preform_step' : -0.5,
+    'win_reward': 145.1,
+    'invalid_move_reward': -10,
+    'model_type': 'DQN',
+    'policy': 'CnnPolicy',
+    'folder_path_for_models': 'models',
+    'complex_map': 'CNN',
+    'max_invalid_move_reset': 20,
+}
 
-# wandb.init(project="sokoban-0.1", config=config_dict , name=config_dict['model_name'])   
+# wandb.init(project="sokoban-CCN", config=config_dict , name=config_dict['model_name'])   
 
 
-# if config_dict['model_type'] == 'PPO':
-#     env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
-#     env.reset()
-#     model = PPO("MlpPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch']) , batch_size=config_dict['batch_size'])
-# elif config_dict['model_type'] == 'DQN':
-#     if config_dict['policy'] == 'CnnPolicy':
-#         env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset'] , complex=False))
-#         env.reset()
-#         model = DQN("CnnPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
-#     # NOTE: Maybe try different policy types but for CnnPolicy we need to change the observation space
-#     # TODO: try more experiments with CnnPolicy and study more about it
-#     else:
-#         env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
-#         env.reset()
-#         model = DQN("MlpPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
-#     # NOTE: DQN models are probably better
-#     # TODO: try more experiments with DQN models
+if config_dict['model_type'] == 'PPO':
+    pass
+    # env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
+    # env.reset()
+    # model = PPO("MlpPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch']) , batch_size=config_dict['batch_size'])
+elif config_dict['model_type'] == 'DQN':
+    if config_dict['policy'] == 'CnnPolicy':
+        env = Monitor(Env(config_dict['map_size'], config_dict['reset'], logging=False, complex_map=config_dict['complex_map'] , reset_after_invalid_move=config_dict['max_invalid_move_reset']))
+        env.reset()
+        model = DQN("CnnPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
+    # NOTE: Maybe try different policy types but for CnnPolicy we need to change the observation space
+    # TODO: try more experiments with CnnPolicy and study more about it
+    # else:
+    #     env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
+    #     env.reset()
+    #     model = DQN("MlpPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
+    # # NOTE: DQN models are probably better
+    # # TODO: try more experiments with DQN models
     
-# model.learn(total_timesteps=5_000_000 , progress_bar=True , callback=CustomCallback(eval_freq=2_500 , config_dict=config_dict))
+model.learn(total_timesteps=100_000 , progress_bar=True , callback=CustomCallback(eval_freq=2_500 , config_dict=config_dict))
 
 
 def test_model(model_path='models-tone-complex-2/model-1709678562-best.zip', config_file='models-tone-complex-2/model-1709678562-best.json'):
