@@ -1,6 +1,7 @@
 import gym
 import wandb
 from stable_baselines3 import PPO , DQN
+from stable_baselines3.common.vec_env import DummyVecEnv
 import torch
 import torch.nn as nn
 import random
@@ -11,7 +12,6 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import BaseCallback
 from queue import PriorityQueue
 import json
-from path import pathfinder
 
 class Game():
     def __init__(self, player_x, player_y, player_char='X', wall_char='#', empty_char='.', box_char='O', final_char='$', final_cords=[(3, 3)],
@@ -31,7 +31,7 @@ class Game():
         self.full_map = []
         self.full_map_path = []
 
-    def move(self, direction) -> bool:
+    def move(self, direction , apply_move = True) -> bool:
         def convert_direction(direction):
             if direction == 'up' or direction == 'w' or direction == 'W':
                 return (0, -1)
@@ -55,16 +55,18 @@ class Game():
     
         if is_valid_move(new_x, new_y):
             if check_wall_collision(new_x, new_y) == False and check_box_collision(new_x, new_y) == False:
-                self.x = new_x
-                self.y = new_y
+                if apply_move:
+                    self.x = new_x
+                    self.y = new_y
                 return True
             elif check_box_collision(new_x, new_y):
                 for i, cord in enumerate(self.box_cords):
                     if cord == [new_x, new_y] or cord == (new_x, new_y):
                         if not check_wall_collision(convert_direction(direction)[0] + new_x, convert_direction(direction)[1] + new_y) and not check_box_collision(convert_direction(direction)[0] + new_x, convert_direction(direction)[1] + new_y) and  is_valid_move(convert_direction(direction)[0] + new_x, convert_direction(direction)[1] + new_y):
                             self.box_cords[i] = (convert_direction(direction)[0] + new_x, convert_direction(direction)[1] + new_y)
-                            self.x = new_x
-                            self.y = new_y
+                            if apply_move:
+                                self.x = new_x
+                                self.y = new_y
                             return True
                         else:
                             return False
@@ -129,7 +131,13 @@ class Game():
         dy = end_y - start_y
         distance = (dx**2 + dy**2)**0.5
         return distance
-
+    
+    def get_valid_moves(self):
+        valid_moves = []
+        for direction in ['up', 'down', 'left', 'right']:
+            if self.move(direction, apply_move=False):
+                valid_moves.append(direction)
+        return valid_moves
     
     def generate_heatmap(self):
         array_2d = [[0 for _ in range(self.map_size[0])] for _ in range(self.map_size[1])]
@@ -192,23 +200,61 @@ class Game():
         for cord in self.final_cords:
             final_map[cord[1]][cord[0]] = self.final_char
             full_map[cord[1]][cord[0]] = 4
-        
-        if complex_map: 
-            try:
-                path = pathfinder(current_x=self.box_cords[0][0], current_y=self.box_cords[0][1], visited=[(self.box_cords[0][0], self.box_cords[0][1])], finish_x=self.final_cords[0][0], finish_y=self.final_cords[0][1], width=self.map_size[0], height=self.map_size[1], matrix=full_map)
-                full_map_path = full_map.copy()
-                for cord in path:
-                    full_map_path[cord[0]][cord[1]] = 5
-            except:
-                full_map_path = full_map
-            self.full_map_path = full_map_path
             
-        self.full_map = full_map
-        
-        if complex_map:
-            return [full_map , full_map_path , player_map, box_map, wall_map, distance_box_final , distance_box_player , distance_final_player]
-        return full_map
+        if complex_map == True:
+            return [full_map , player_map, box_map, wall_map, final_map , distance_box_final , distance_box_player , distance_final_player]
+        elif complex_map == 'CNN':
+            # Reshape Sokoban level to 3D array for CNN input
+            sokoban_level_3d = np.zeros((self.map_size[0], self.map_size[1], 5), dtype=int)
+
+            # Encode player, walls, boxes, and goals in different channels
+            sokoban_level_3d[:, :, 0] = (full_map == 1).astype(int)  # Player channel
+            sokoban_level_3d[:, :, 1] = (full_map == 2).astype(int)  # Box channel
+            sokoban_level_3d[:, :, 2] = (full_map == 3).astype(int)  # Wall channel
+            sokoban_level_3d[:, :, 3] = (full_map == 4).astype(int)  # Goal channel
+            sokoban_level_3d[:, :, 4] = (full_map == 0).astype(int)  # Empty channel
+            return sokoban_level_3d
+        else:
+            return full_map
     
+    def find_path_to_goal(self):
+        def heuristic(node, goal):
+            return abs(node[0] - goal[0]) + abs(node[1] - goal[1])
+
+        def get_neighbors(node):
+            x, y = node
+            return [(x+1, y), (x-1, y), (x, y+1), (x, y-1)]
+
+        start = self.box_cords[0]
+        goal = self.final_cords[0]
+
+        open_set = PriorityQueue()
+        open_set.put((0, start, []))  # (priority, node, path)
+
+        closed_set = set()
+
+        while not open_set.empty():
+            _, current, path = open_set.get()
+
+            if current == goal:
+                return path
+
+            if current in closed_set:
+                continue
+            
+            if len(path) > 50:
+                return []
+
+            closed_set.add(current)
+
+            for neighbor in get_neighbors(current):
+                if neighbor not in self.wall_cords and neighbor not in closed_set:
+                    new_path = path + [current]
+                    priority = len(new_path) + heuristic(neighbor, goal)
+                    open_set.put((priority, neighbor, new_path))
+
+        return []  # No path found
+        
     
     def check_win(self):
         for box_cord in self.box_cords:
@@ -263,10 +309,13 @@ def load_function_from_json(folder_path = 'maps' , map_name = None):
     
 class Env(gym.Env):
     def __init__(self , map_size = (20, 20) , reset_step = 2500 , logging = True , complex_map = False , reset_after_invalid_move = 10):
+        super().__init__()
         self.game = Game(player_x=3, player_y=6, player_char=1, wall_char=2, empty_char=0, box_char=3, final_char=4 , map_size=map_size)
         self.action_space = spaces.Discrete(4)
-        if complex_map:
+        if complex_map == True:
             self.observation_space = spaces.Box(low=0, high=4, shape=(8, 10, 10 ), dtype=np.float32)
+        elif complex_map == 'CNN':
+            self.observation_space = spaces.Box(low=0, high=255, shape=(6, 10, 10 ), dtype=np.uint8)
         else:
             self.observation_space = spaces.Box(low=0, high=4, shape=(1, 10, 10 ), dtype=np.float32)
         self.logging = logging
@@ -495,7 +544,7 @@ def toneParams(tries = 100):
 
 
 config_dict = {
-    'learning_rate': 0.01,
+    'learning_rate': 0.001,
     'net_arch': {'pi': [512,512], 'vf': [1024,1024,512,512]},
     'net_arch_dqn': [1024, 1024, 1024, 512],
     'batch_size': 128,
@@ -511,26 +560,53 @@ config_dict = {
     'preform_step' : -0.5,
     'win_reward': 145.1,
     'invalid_move_reward': -10,
-    'model_type': 'DQN',
+    'model_type': 'PPO',
     'policy': 'CnnPolicy',
     'folder_path_for_models': 'models',
     'complex_map': 'CNN',
     'max_invalid_move_reset': 20,
+    'no_win_reward': 0,
 }
 
 # wandb.init(project="sokoban-CCN", config=config_dict , name=config_dict['model_name'])   
 
+class CustomCNN(BaseFeaturesExtractor):
+    def __init__(self, observation_space, features_dim=256):
+        super(CustomCNN, self).__init__(observation_space, features_dim)
+        n_input_channels = observation_space.shape[0]
+
+        self.cnn = nn.Sequential(
+            nn.Conv2d(n_input_channels, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(512, 1024, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Flatten()
+        )
+
+    def forward(self, observations):
+        print("Input shape:", observations.shape)
+        intermediate_output = self.cnn(observations)
+        print("Intermediate output shape:", intermediate_output.shape)
+        return intermediate_output
 
 if config_dict['model_type'] == 'PPO':
-    pass
-    # env = Monitor(Env(config_dict['map_size'], config_dict['reset'], config_dict['max_invalid_move_reset']))
-    # env.reset()
-    # model = PPO("MlpPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch']) , batch_size=config_dict['batch_size'])
+    env = DummyVecEnv([lambda: Env(config_dict['map_size'], config_dict['reset'], logging=False, complex_map=config_dict['complex_map'], reset_after_invalid_move=config_dict['max_invalid_move_reset'])])
+    env.reset()
+    obs_shape = env.observation_space.shape
+    policy_kwargs = dict(features_extractor_class=CustomCNN)
+    model = PPO("CnnPolicy", env, verbose=1, learning_rate=config_dict['learning_rate'], policy_kwargs=policy_kwargs, batch_size=config_dict['batch_size'])
 elif config_dict['model_type'] == 'DQN':
     if config_dict['policy'] == 'CnnPolicy':
-        env = Monitor(Env(config_dict['map_size'], config_dict['reset'], logging=False, complex_map=config_dict['complex_map'] , reset_after_invalid_move=config_dict['max_invalid_move_reset']))
+        env = DummyVecEnv([lambda:Env(config_dict['map_size'], config_dict['reset'], logging=False, complex_map=config_dict['complex_map'] , reset_after_invalid_move=config_dict['max_invalid_move_reset'])])
         env.reset()
-        model = DQN("CnnPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=dict(net_arch=config_dict['net_arch_dqn']) , batch_size=config_dict['batch_size'])
+        policy_kwargs = dict(features_extractor_class=CustomCNN)
+        model = DQN("CnnPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=policy_kwargs , batch_size=config_dict['batch_size'])
     # NOTE: Maybe try different policy types but for CnnPolicy we need to change the observation space
     # TODO: try more experiments with CnnPolicy and study more about it
     # else:
@@ -540,7 +616,7 @@ elif config_dict['model_type'] == 'DQN':
     # # NOTE: DQN models are probably better
     # # TODO: try more experiments with DQN models
     
-model.learn(total_timesteps=100_000 , progress_bar=True , callback=CustomCallback(eval_freq=2_500 , config_dict=config_dict))
+model.learn(total_timesteps=100_000 , progress_bar=True)
 
 
 def test_model(model_path='models-tone-complex-2/model-1709678562-best.zip', config_file='models-tone-complex-2/model-1709678562-best.json'):
