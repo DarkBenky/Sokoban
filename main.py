@@ -12,6 +12,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import BaseCallback
 from queue import PriorityQueue
 import json
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 class Game():
     def __init__(self, player_x, player_y, player_char='X', wall_char='#', empty_char='.', box_char='O', final_char='$', final_cords=[(3, 3)],
@@ -550,28 +551,28 @@ config_dict = {
     'batch_size': 128,
     'model_name': generate_model_name(),
     'map_size': (10, 10),
-    'reset': 116,
-    'box_near_goal': 0.5,
-    'box_close_goal' : 0.25,
-    'box_move_reward': 0.1,
-    'box_goal_reward': 0.0,
-    'box_player_reward': 0.0,
+    'reset': np.inf,
+    'box_near_goal': 0.55,
+    'box_close_goal' : 0.35,
+    'box_move_reward': 0.15,
+    'box_goal_reward': 0.05,
+    'box_player_reward': 0.01,
     'final_player_reward': 0.0,
     'preform_step' : -0.5,
-    'win_reward': 145.1,
+    'win_reward': 150,
     'invalid_move_reward': -10,
-    'model_type': 'PPO',
+    'model_type': 'DQN',
     'policy': 'CnnPolicy',
     'folder_path_for_models': 'models',
-    'complex_map': 'CNN',
-    'max_invalid_move_reset': 20,
+    'complex_map': True,
+    'max_invalid_move_reset': np.inf,
     'no_win_reward': 0,
 }
 
 # wandb.init(project="sokoban-CCN", config=config_dict , name=config_dict['model_name'])   
 
 class CustomCNN(BaseFeaturesExtractor):
-    def __init__(self, observation_space, features_dim=256):
+    def __init__(self, observation_space, features_dim=512):
         super(CustomCNN, self).__init__(observation_space, features_dim)
         n_input_channels = observation_space.shape[0]
 
@@ -584,29 +585,81 @@ class CustomCNN(BaseFeaturesExtractor):
             nn.ReLU(),
             nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            nn.Conv2d(512, 1024, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
+            # nn.Conv2d(512, 1024, kernel_size=3, stride=1, padding=1),
+            # nn.ReLU(),
             nn.Flatten()
         )
-
+        
+        # Adjust the fully connected layers to match the output size from CNN
+        self.fc = nn.Sequential(
+            nn.Linear(51200, features_dim),
+            nn.ReLU()
+        )
+        
     def forward(self, observations):
-        print("Input shape:", observations.shape)
         intermediate_output = self.cnn(observations)
-        print("Intermediate output shape:", intermediate_output.shape)
-        return intermediate_output
+        # print("Intermediate output shape:", intermediate_output.shape)
+        
+        # Apply fully connected layers
+        fc_output = self.fc(intermediate_output)
+        # print("FC output shape:", fc_output.shape)
 
-if config_dict['model_type'] == 'PPO':
-    env = DummyVecEnv([lambda: Env(config_dict['map_size'], config_dict['reset'], logging=False, complex_map=config_dict['complex_map'], reset_after_invalid_move=config_dict['max_invalid_move_reset'])])
+        return fc_output
+        
+    
+def make_env():
+    env = DummyVecEnv([lambda:Env(config_dict['map_size'], config_dict['reset'], logging=False, complex_map=config_dict['complex_map'] , reset_after_invalid_move=config_dict['max_invalid_move_reset'])])
     env.reset()
-    obs_shape = env.observation_space.shape
-    policy_kwargs = dict(features_extractor_class=CustomCNN)
-    model = PPO("CnnPolicy", env, verbose=1, learning_rate=config_dict['learning_rate'], policy_kwargs=policy_kwargs, batch_size=config_dict['batch_size'])
-elif config_dict['model_type'] == 'DQN':
-    if config_dict['policy'] == 'CnnPolicy':
-        env = DummyVecEnv([lambda:Env(config_dict['map_size'], config_dict['reset'], logging=False, complex_map=config_dict['complex_map'] , reset_after_invalid_move=config_dict['max_invalid_move_reset'])])
-        env.reset()
-        policy_kwargs = dict(features_extractor_class=CustomCNN)
-        model = DQN("CnnPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=policy_kwargs , batch_size=config_dict['batch_size'])
+    return env
+
+num_episodes = 1000
+max_steps_per_episode = 10_000
+
+# env = DummyVecEnv([make_env])
+env = Monitor(Env(config_dict['map_size'], config_dict['reset'], logging=False, complex_map=config_dict['complex_map'] , reset_after_invalid_move=config_dict['max_invalid_move_reset']))
+model = DQN("CnnPolicy", env, verbose=1, learning_rate=config_dict['learning_rate'], policy_kwargs=dict(features_extractor_class=CustomCNN), batch_size=config_dict['batch_size'])
+# model = DQN("MlpPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], batch_size=config_dict['batch_size'])
+replay_buffer = ReplayBuffer(buffer_size=100_000)
+
+# fill buffer with random actions
+obs = env.reset()
+for _ in range(10_000):
+    action = env.action_space.sample()
+    next_obs, reward, done, _ = env.step(action)
+    replay_buffer.add(obs, action, reward, next_obs, done)
+    obs = next_obs
+    if done:
+        obs = env.reset()
+
+
+for _ in range(num_episodes):
+    obs = env.reset()
+    for _ in range(max_steps_per_episode):
+        action, _ = model.predict(obs)
+        next_obs, reward, done, _ = env.step(action)
+        replay_buffer.add(obs, action, reward, next_obs, done)
+        obs = next_obs
+
+        # DQN training step (adjust as needed)
+        batch = replay_buffer.sample(batch_size=128)
+        model.learn(total_timesteps=2_500, log_interval=10, reset_num_timesteps=False, replay_buffer=batch)
+
+        if done:
+            break
+
+
+# if config_dict['model_type'] == 'PPO':
+#     env = DummyVecEnv([lambda: Env(config_dict['map_size'], config_dict['reset'], logging=True, complex_map=config_dict['complex_map'], reset_after_invalid_move=config_dict['max_invalid_move_reset'])])
+#     env.reset()
+#     obs_shape = env.observation_space.shape
+#     policy_kwargs = dict(features_extractor_class=CustomCNN)
+#     model = PPO("CnnPolicy", env, verbose=1, learning_rate=config_dict['learning_rate'], policy_kwargs=policy_kwargs, batch_size=config_dict['batch_size'])
+# elif config_dict['model_type'] == 'DQN':
+#     if config_dict['policy'] == 'CnnPolicy':
+#         env = DummyVecEnv([lambda:Env(config_dict['map_size'], config_dict['reset'], logging=False, complex_map=config_dict['complex_map'] , reset_after_invalid_move=config_dict['max_invalid_move_reset'])])
+#         env.reset()
+#         policy_kwargs = dict(features_extractor_class=CustomCNN)
+#         model = DQN("CnnPolicy", env, verbose=1 , learning_rate=config_dict['learning_rate'], policy_kwargs=policy_kwargs , batch_size=config_dict['batch_size'])
     # NOTE: Maybe try different policy types but for CnnPolicy we need to change the observation space
     # TODO: try more experiments with CnnPolicy and study more about it
     # else:
@@ -616,48 +669,7 @@ elif config_dict['model_type'] == 'DQN':
     # # NOTE: DQN models are probably better
     # # TODO: try more experiments with DQN models
     
-model.learn(total_timesteps=100_000 , progress_bar=True)
+# model.learn(total_timesteps=500_000 , progress_bar=True, callback=CustomCallback(eval_freq=5000 , config_dict=config_dict))
+# model.save(config_dict['folder_path_for_models']+ '/' +config_dict['model_name'])
 
-
-def test_model(model_path='models-tone-complex-2/model-1709678562-best.zip', config_file='models-tone-complex-2/model-1709678562-best.json'):
-    with open(config_file) as f:
-        global config_dict
-        config_dict = json.load(f)
-    env = Monitor(Env(config_dict['map_size'], config_dict['reset'], logging=False , complex_map=config_dict['complex_map'], reset_after_invalid_move=config_dict['max_invalid_move_reset']))
-    if config_dict['model_type'] == 'PPO':
-        model = PPO.load(model_path)
-        model.set_env(env)
-    elif config_dict['model_type'] == 'DQN':
-        model = DQN.load(model_path)
-        model.set_env(env)
-    model_performance = 0
-    model_data = []
-    win_count = 0
-    for i in range(10):
-        obs = model.env.reset()
-        maps = []
-        done = False
-        steps = 100
-        while not done and steps > 0:
-            action, _states = model.predict(obs, deterministic=True)
-            # print(model.env.render())
-            maps.append(model.env.render())
-            obs, reward, done, info = model.env.step(action)
-            steps -= 1
-            if done:
-                if reward >= 50:
-                    model_performance += 100 / (steps + 1)
-                    win_count += 1
-                    maps.append(['win', [] , []])
-        model_data.append(maps)
-    print(f"Model performance: {model_performance}" , f"Win count: {(win_count / 10) * 100}%")
-    for data in model_data:
-            for i in range(len(data)):
-                print(data[i][0])
-                print("box position: ",data[i][1])
-                print("final position: ",data[i][2])
-    return model_performance , model_data
-
-# test_model()
-    
    
