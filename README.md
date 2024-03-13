@@ -1,2 +1,0 @@
-# sokoban-AI
-# Sokoban-Project

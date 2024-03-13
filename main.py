@@ -2,6 +2,7 @@ import gym
 # import wandb
 from stable_baselines3 import PPO , DQN
 from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.callbacks import BaseCallback
 # import torch
 # import torch.nn as nn
 import random
@@ -137,7 +138,17 @@ class SokobanEnv(gym.Env):
             np.any(np.all(self.boxes == new_box_position, axis=1)) or
             barrier_collision
         )
-
+        
+    def average_distance_of_boxes_to_goals(self):
+        min_distances = []
+        for box in self.boxes:
+            distances = []
+            for goal in self.goals:
+                distance = np.linalg.norm(box - goal)
+                distances.append(distance)
+            min_distances.append(min(distances))
+        return np.mean(min_distances)
+    
     def render(self, mode='human' , close = False):
         for i in range(self.arena.shape[0]):
             for j in range(self.arena.shape[1]):
@@ -178,18 +189,31 @@ class SokobanEnv(gym.Env):
         # Take a step in the environment based on the selected action
         direction = self.get_direction_from_action(action)
 
+        previous_average_distance = self.average_distance_of_boxes_to_goals()
+        
         success = self.move(direction)
 
         reward = 0.0
         done = False
 
         if success:
+            current_average_distance = self.average_distance_of_boxes_to_goals()
+            
             self.arena = self.construct_arena()
             if self.is_win():
-                reward = 1.0
+                reward = 20.0
+                # print("Win")
                 done = True
             else:
-                reward = -0.1  # Small negative reward for each step
+                if current_average_distance < previous_average_distance:
+                    reward = 0.5  # reward for reducing the average distance
+                elif current_average_distance > previous_average_distance:
+                    reward = -0.1  # Penalty for increasing the average distance
+                else:
+                    reward = -0.25  # Small negative reward for each step  
+
+        else:
+            reward = -1.0
 
         return self.arena, reward, done, {}
     
@@ -203,7 +227,54 @@ class SokobanEnv(gym.Env):
         self.arena = self.construct_arena()
 
         return self.arena
-        
+    
+
+class SaveBestModelCallback(BaseCallback):
+    def __init__(self, eval_env, eval_freq: int = 10000, save_path: str = 'models/best_model' , episodes = 10 , max_steps = 1000):
+        super(SaveBestModelCallback, self).__init__()
+        self.eval_env = eval_env
+        self.eval_freq = eval_freq
+        self.save_path = save_path
+        self.episodes = episodes
+        self.max_steps = max_steps
+        self.best_mean_reward = -np.inf  # Initialize with negative infinity
+
+    def _on_step(self):
+        if self.n_calls % self.eval_freq == 0 and self.n_calls > 0:
+            # Evaluate the model and update the best mean reward
+            wins = 0
+            mean_step_reward = 0.0
+            illegal_moves = 0
+            for _ in range(self.episodes):
+                obs = self.eval_env.reset()
+                done = False
+                episode_reward = 0.0
+                steps = self.max_steps
+
+                while not done and steps > 0:
+                    action, _ = self.model.predict(obs, deterministic=True)
+                    obs, reward, done, _ = self.eval_env.step(action)
+                    episode_reward += reward
+                    steps -= 1
+                    
+                    if reward <= -0.5:
+                        illegal_moves += 1
+                    
+                    if done:
+                        wins += 1
+                    
+                mean_step_reward += episode_reward / self.max_steps
+            
+            mean_reward = mean_step_reward / self.episodes
+
+            if mean_reward > self.best_mean_reward:
+                self.best_mean_reward = mean_reward
+                print(f"Saving new best model with mean step reward {mean_reward} to {self.save_path}")
+                self.model.save(self.save_path)
+                with open(self.save_path+".md", 'w') as f:
+                    f.write("mean step reward :"+str(mean_reward)+"\n")
+                    f.write("win rate :"+str(wins/self.episodes*100)+"%"+"\n")
+                    f.write("illegal moves :"+str(illegal_moves/(self.episodes * self.max_steps) *100)+"%"+"\n")
 
 # Create Sokoban environment
 barriers, player_x, player_y, box, goals = load_function_from_json('maps')
@@ -213,35 +284,55 @@ env.reset()
 # Wrap the environment
 env = DummyVecEnv([lambda: env])
 
-model = PPO("MlpPolicy", env, verbose=1)
+# Set a higher entropy coefficient (adjust the value as needed)
+ent_coef = 0.025
+
+model = PPO("MlpPolicy", env, verbose=1 , ent_coef = ent_coef , n_epochs=64)
+
+# Create a Sokoban environment for evaluation
+eval_env = SokobanEnv(playerXY=(player_x, player_y), barriers=barriers, boxes=box, goals=goals)
+eval_env.reset()
+eval_env = DummyVecEnv([lambda: eval_env])
+
+# Instantiate the SaveBestModelCallback
+name = 'sokoban'+str(random.randint(0, 1000))
+save_best_model_callback = SaveBestModelCallback(eval_env, eval_freq=10_000, save_path=f'models/best_model-{name}', episodes=10, max_steps=1000)
 
 # Train the model
-model.learn(total_timesteps=100_000)
+model.learn(total_timesteps=250_000 , progress_bar=True , log_interval=10 , callback=save_best_model_callback)
 
-# Save the trained model
-model.save("models/ppo_sokoban")
+# # Save the trained model
+# model.save("models/ppo_sokoban")
 
-# Evaluate the trained model
-mean_reward_list = []
-max_episode_steps = 1000
+# # Evaluate the trained model
+# mean_reward_list = []
+# max_episode_steps = 1000
+# tests = 25
+# wins = 0
 
-for _ in range(10):  # 10 evaluation episodes
-    obs = env.reset()
-    done = False
-    total_reward = 0
-    step_count = 0
+# for _ in range(tests):  # 10 evaluation episodes
+#     obs = env.reset()
+#     done = False
+#     total_reward = 0
+#     step_count = 0
 
-    while not done:
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, done, _ = env.step(action)
-        total_reward += reward
-        step_count += 1
+#     while not done:
+#         action, _ = model.predict(obs, deterministic=True)
+#         obs, reward, done, _ = env.step(action)
+#         env.render()
+#         total_reward += reward
+#         step_count += 1
 
-        if step_count >= max_episode_steps:
-            done = True
+#         if done and reward == 1.0:
+#             wins += 1
+#             print(f"Win in {step_count} steps")
 
-    mean_reward_list.append(total_reward)
+#         if step_count >= max_episode_steps:
+#             done = True
 
-mean_reward = sum(mean_reward_list) / len(mean_reward_list)
-print(f"Mean reward: {mean_reward}")
+#     mean_reward_list.append(total_reward)
+
+# mean_reward = sum(mean_reward_list) / len(mean_reward_list)
+# print(f"Mean reward: {mean_reward}")
+# print(f"Win rate: {wins / tests * 100:.2f}%")
 
