@@ -14,7 +14,11 @@ PREFORMED_MOVE_PENALTY = -0.5
 WIN_REWARD = 100
 BOX_PUSH_REWARD = 1
 BOX_CLOSE_TO_GOAL_REWARD = 2.5
+TARGET_UPDATE = 10
 
+from collections import namedtuple
+
+Transition = namedtuple('Transition', ('state', 'action', 'reward', 'next_state', 'done'))
 
 
 
@@ -59,7 +63,6 @@ class SokobanEnv:
         self.arena = self.construct_arena()
         
         self.action_space = np.array([0, 1, 2, 3])
-        self.observation_space = self.create_observation()
         
         self.running = False
 
@@ -223,7 +226,7 @@ class SokobanEnv:
         else:
             reward = INVALID_MOVE_PENALTY
 
-        return self.observation_space, reward, done, {}
+        return self.arena, reward, done, {}
     
     def reset(self):
         barriers, player_x, player_y, box, goals = load_function_from_json('maps')
@@ -233,33 +236,90 @@ class SokobanEnv:
         self.boxes = np.array(box)
         self.goals = np.array(goals)
         self.arena = self.construct_arena()
-        self.observation_space = self.create_observation()
 
-        return self.observation_space
+        return self.arena
 
-class QLearningAgent:
-    def __init__(self, env):
-        self.env = env
-        self.q_table = np.zeros((env.observation_space.shape[0], env.observation_space.shape[1], env.action_space.shape[0]))
+class DQN(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super(DQN, self).__init__()
+        self.fc1 = nn.Linear(input_dim, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.fc3 = nn.Linear(64, output_dim)
 
-        self.learning_rate = 0.1
-        self.discount_factor = 0.99
-        self.epsilon = 0.2
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+
+class ReplayMemory:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.memory = []
+        self.position = 0
+
+    def push(self, transition):
+        if len(self.memory) < self.capacity:
+            self.memory.append(None)
+        self.memory[self.position] = transition
+        self.position = (self.position + 1) % self.capacity
+
+    def sample(self, batch_size):
+        return random.sample(self.memory, batch_size)
+
+    def __len__(self):
+        return len(self.memory)
+
+class DQNAgent:
+    def __init__(self, env, replay_capacity=10000, batch_size=32):
+            self.env = env
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self.policy_net = DQN(env.arena.shape[0], env.action_space.shape[0]).to(self.device)
+            self.target_net = DQN(env.arena.shape[0], env.action_space.shape[0]).to(self.device)
+            self.target_net.load_state_dict(self.policy_net.state_dict())
+            self.target_net.eval()
+            self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.001)
+            self.loss_fn = nn.MSELoss()
+
+            self.discount_factor = 0.99
+            self.epsilon = 0.2
+
+            self.replay_memory = ReplayMemory(replay_capacity)
+            self.batch_size = batch_size
 
     def choose_action(self, state):
-        if np.random.uniform(0, 1) < self.epsilon:
+        if np.random.rand() < self.epsilon:
             return np.random.choice(self.env.action_space)
         else:
-            return np.argmax(self.q_table[state])
+            with torch.no_grad():
+                state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(self.device)
+                q_values = self.policy_net(state_tensor)
+                return q_values.argmax().item()
 
-    def learn(self, state, action, reward, next_state, done):
-        if done:
-            td_target = reward
-        else:
-            td_target = reward + self.discount_factor * np.max(self.q_table[next_state])
+    def learn(self):
+        if len(self.replay_memory) < self.batch_size:
+            return
 
-        td_error = td_target - self.q_table[state][action]
-        self.q_table[state][action] += self.learning_rate * td_error
+        transitions = self.replay_memory.sample(self.batch_size)
+        batch = Transition(*zip(*transitions))
+
+        state_batch = torch.tensor(batch.state, dtype=torch.float32).to(self.device)
+        action_batch = torch.tensor(batch.action, dtype=torch.long).to(self.device)
+        reward_batch = torch.tensor(batch.reward, dtype=torch.float32).to(self.device)
+        next_state_batch = torch.tensor(batch.next_state, dtype=torch.float32).to(self.device)
+        done_batch = torch.tensor(batch.done, dtype=torch.float32).to(self.device)
+
+        q_values = self.policy_net(state_batch).gather(1, action_batch.unsqueeze(1))
+        with torch.no_grad():
+            next_q_values = self.target_net(next_state_batch).max(1)[0].unsqueeze(1)
+            expected_q_values = reward_batch + self.discount_factor * next_q_values * (1 - done_batch)
+
+        loss = self.loss_fn(q_values, expected_q_values)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
 
     def train(self, num_episodes):
         for episode in range(num_episodes):
@@ -270,21 +330,27 @@ class QLearningAgent:
             while not done:
                 action = self.choose_action(state)
                 next_state, reward, done, _ = self.env.step(action)
-                self.learn(state, action, reward, next_state, done)
+                self.replay_memory.push(Transition(state, action, reward, next_state, done))
+                self.learn()
                 total_reward += reward
                 state = next_state
 
             print(f"Episode {episode+1}/{num_episodes}, Total Reward: {total_reward}")
-    
-    def save_q_table(self , path):
-        np.save(path , self.q_table)
-        
-    def load_q_table(self , path):
-        self.q_table = np.load(path)
+
+            if episode % TARGET_UPDATE == 0:
+                self.target_net.load_state_dict(self.policy_net.state_dict())
+
+    def save_q_network(self, path):
+        torch.save(self.policy_net.state_dict(), path)
+
+    def load_q_network(self, path):
+        self.policy_net.load_state_dict(torch.load(path))
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.target_net.eval()
 
 barriers, player_x, player_y, box, goals = load_function_from_json('maps')
 env = SokobanEnv(playerXY=(player_x, player_y) , barriers=barriers , boxes=box , goals=goals)  # Instantiate your environment
 env.reset()
-agent = QLearningAgent(env)  # Create Q-learning agent
+agent = DQNAgent(env)  # Instantiate your agent
 agent.train(num_episodes=1000)  # Train the agent
 agent.save_q_table('q_table.npy')  # Save the Q-table to a file
