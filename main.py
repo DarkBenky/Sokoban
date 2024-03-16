@@ -1,20 +1,20 @@
 import gym
-# import wandb
-from stable_baselines3 import PPO , DQN
-from stable_baselines3.common.vec_env import DummyVecEnv
-from stable_baselines3.common.callbacks import BaseCallback
-# import torch
-# import torch.nn as nn
 import random
 import os
-# from gym import spaces
 import numpy as np
-# from stable_baselines3.common.monitor import Monitor
-# from stable_baselines3.common.callbacks import BaseCallback
-# from queue import PriorityQueue
 import json
-# from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-# from stable_baselines3.common.buffers import ReplayBuffer
+import time
+from PIL import Image, ImageDraw
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+INVALID_MOVE_PENALTY = -5
+PREFORMED_MOVE_PENALTY = -0.5
+WIN_REWARD = 100
+BOX_PUSH_REWARD = 1
+BOX_CLOSE_TO_GOAL_REWARD = 2.5
+
 
 
 
@@ -50,28 +50,20 @@ def load_function_from_json(folder_path = 'maps' , map_name = None):
     return barriers, player_x, player_y, box, goals
 
 
-class SokobanEnv(gym.Env):
+class SokobanEnv:
     def __init__(self, playerXY=(0, 0), barriers=[], boxes=[], goals=[]):
-        super(SokobanEnv, self).__init__()
-        
         self.playerXY = np.array(playerXY)
         self.boxes = np.array(boxes)
         self.goals = np.array(goals)
         self.barriers = np.array(barriers)
         self.arena = self.construct_arena()
         
-        self.action_space = gym.spaces.Discrete(4)
-        self.observation_space = gym.spaces.Box(low=0, high=4, shape=self.arena.shape, dtype=np.int32)
+        self.action_space = np.array([0, 1, 2, 3])
+        self.observation_space = self.create_observation()
+        
+        self.running = False
 
     def construct_arena(self):
-        # TODO: make it dynamic
-        # if len(self.barriers) > 0:
-        #     max_x = max(self.playerXY[0], *self.boxes[:, 0], *self.goals[:, 0], *self.barriers[:, 0]) + 1
-        #     max_y = max(self.playerXY[1], *self.boxes[:, 1], *self.goals[:, 1], *self.barriers[:, 1]) + 1
-        # else:
-        #     max_x = max(self.playerXY[0], *self.boxes[:, 0], *self.goals[:, 0]) + 1
-        #     max_y = max(self.playerXY[1], *self.boxes[:, 1], *self.goals[:, 1]) + 1
-
         arena = np.zeros((10, 10))
 
         for barrier in self.barriers:
@@ -86,6 +78,40 @@ class SokobanEnv(gym.Env):
         arena[self.playerXY[0]][self.playerXY[1]] = 4
 
         return arena
+    
+    def create_observation(self):
+        obs = np.zeros((self.arena.shape[0], self.arena.shape[1], 5), dtype=np.int8)
+    
+        # Encode player position
+        obs[self.playerXY[0], self.playerXY[1], 0] = 1
+        
+        # Encode box positions
+        for box in self.boxes:
+            obs[box[0], box[1], 1] = 1
+        
+        # Encode goal positions
+        for goal in self.goals:
+            obs[goal[0], goal[1], 2] = 1
+            
+        for barrier in self.barriers:
+            obs[barrier[0], barrier[1], 3] = 1
+            
+        valid_moves = self.valid_moves()
+        for move in valid_moves:
+            dx , dy = self.get_direction_to_dx_dy(move)
+            obs[self.playerXY[0] + dx , self.playerXY[1] + dy , 4] = 1
+            
+        return obs
+    
+    def get_direction_to_dx_dy(self, direction):
+        if direction == 'W':
+            return -1, 0
+        elif direction == 'S':
+            return 1, 0
+        elif direction == 'A':
+            return 0, -1
+        elif direction == 'D':
+            return 0, 1
 
     def move(self, direction , execute = True):
         new_player_position = self.playerXY.copy()
@@ -138,32 +164,9 @@ class SokobanEnv(gym.Env):
             np.any(np.all(self.boxes == new_box_position, axis=1)) or
             barrier_collision
         )
-        
-    def average_distance_of_boxes_to_goals(self):
-        min_distances = []
-        for box in self.boxes:
-            distances = []
-            for goal in self.goals:
-                distance = np.linalg.norm(box - goal)
-                distances.append(distance)
-            min_distances.append(min(distances))
-        return np.mean(min_distances)
     
-    def render(self, mode='human' , close = False):
-        for i in range(self.arena.shape[0]):
-            for j in range(self.arena.shape[1]):
-                current_position = (i, j)
-                if np.array_equal(self.playerXY, current_position):
-                    print('P', end=' ')
-                elif any(np.array_equal(box, current_position) for box in self.boxes):
-                    print('B', end=' ')
-                elif any(np.array_equal(goal, current_position) for goal in self.goals):
-                    print('G', end=' ')
-                elif self.arena[i][j] == 1:
-                    print('#', end=' ')
-                else:
-                    print('.', end=' ')
-            print()
+    def render(self):
+        pass
     
     def valid_moves(self):
         possible_moves = ['W', 'S', 'A', 'D']
@@ -184,38 +187,43 @@ class SokobanEnv(gym.Env):
             return 'A'
         elif action == 3:
             return 'D'
+        
+    def box_closer_to_goal(self, previous_box_positions, current_box_positions):
+        for box in current_box_positions:
+            if not any(np.array_equal(box, prev_box) for prev_box in previous_box_positions):
+                # calculate the distance from the box to the goal
+                for goal in self.goals:
+                    distance = np.linalg.norm(box - goal)
+                    if distance < 2:
+                        return True
+        return False
     
     def step(self, action):
         # Take a step in the environment based on the selected action
         direction = self.get_direction_from_action(action)
-
-        previous_average_distance = self.average_distance_of_boxes_to_goals()
+        
+        box_positions = self.boxes.copy()
         
         success = self.move(direction)
 
-        reward = 0.0
+        reward = 0
         done = False
 
         if success:
-            current_average_distance = self.average_distance_of_boxes_to_goals()
-            
             self.arena = self.construct_arena()
             if self.is_win():
-                reward = 20.0
-                # print("Win")
+                reward = WIN_REWARD
                 done = True
             else:
-                if current_average_distance < previous_average_distance:
-                    reward = 0.5  # reward for reducing the average distance
-                elif current_average_distance > previous_average_distance:
-                    reward = -0.1  # Penalty for increasing the average distance
-                else:
-                    reward = -0.25  # Small negative reward for each step  
-
+                reward += PREFORMED_MOVE_PENALTY
+                if np.any(self.boxes != box_positions):
+                    reward += BOX_PUSH_REWARD
+                    if self.box_closer_to_goal(box_positions , self.boxes):
+                        reward += BOX_CLOSE_TO_GOAL_REWARD
         else:
-            reward = -1.0
+            reward = INVALID_MOVE_PENALTY
 
-        return self.arena, reward, done, {}
+        return self.observation_space, reward, done, {}
     
     def reset(self):
         barriers, player_x, player_y, box, goals = load_function_from_json('maps')
@@ -225,114 +233,58 @@ class SokobanEnv(gym.Env):
         self.boxes = np.array(box)
         self.goals = np.array(goals)
         self.arena = self.construct_arena()
+        self.observation_space = self.create_observation()
 
-        return self.arena
+        return self.observation_space
+
+class QLearningAgent:
+    def __init__(self, env):
+        self.env = env
+        self.q_table = np.zeros((env.observation_space.shape[0], env.observation_space.shape[1], env.action_space.shape[0]))
+
+        self.learning_rate = 0.1
+        self.discount_factor = 0.99
+        self.epsilon = 0.2
+
+    def choose_action(self, state):
+        if np.random.uniform(0, 1) < self.epsilon:
+            return np.random.choice(self.env.action_space)
+        else:
+            return np.argmax(self.q_table[state])
+
+    def learn(self, state, action, reward, next_state, done):
+        if done:
+            td_target = reward
+        else:
+            td_target = reward + self.discount_factor * np.max(self.q_table[next_state])
+
+        td_error = td_target - self.q_table[state][action]
+        self.q_table[state][action] += self.learning_rate * td_error
+
+    def train(self, num_episodes):
+        for episode in range(num_episodes):
+            state = self.env.reset()
+            done = False
+            total_reward = 0
+
+            while not done:
+                action = self.choose_action(state)
+                next_state, reward, done, _ = self.env.step(action)
+                self.learn(state, action, reward, next_state, done)
+                total_reward += reward
+                state = next_state
+
+            print(f"Episode {episode+1}/{num_episodes}, Total Reward: {total_reward}")
     
+    def save_q_table(self , path):
+        np.save(path , self.q_table)
+        
+    def load_q_table(self , path):
+        self.q_table = np.load(path)
 
-class SaveBestModelCallback(BaseCallback):
-    def __init__(self, eval_env, eval_freq: int = 10000, save_path: str = 'models/best_model' , episodes = 10 , max_steps = 1000):
-        super(SaveBestModelCallback, self).__init__()
-        self.eval_env = eval_env
-        self.eval_freq = eval_freq
-        self.save_path = save_path
-        self.episodes = episodes
-        self.max_steps = max_steps
-        self.best_mean_reward = -np.inf  # Initialize with negative infinity
-
-    def _on_step(self):
-        if self.n_calls % self.eval_freq == 0 and self.n_calls > 0:
-            # Evaluate the model and update the best mean reward
-            wins = 0
-            mean_step_reward = 0.0
-            illegal_moves = 0
-            for _ in range(self.episodes):
-                obs = self.eval_env.reset()
-                done = False
-                episode_reward = 0.0
-                steps = self.max_steps
-
-                while not done and steps > 0:
-                    action, _ = self.model.predict(obs, deterministic=True)
-                    obs, reward, done, _ = self.eval_env.step(action)
-                    episode_reward += reward
-                    steps -= 1
-                    
-                    if reward <= -0.5:
-                        illegal_moves += 1
-                    
-                    if done:
-                        wins += 1
-                    
-                mean_step_reward += episode_reward / self.max_steps
-            
-            mean_reward = mean_step_reward / self.episodes
-
-            if mean_reward > self.best_mean_reward:
-                self.best_mean_reward = mean_reward
-                print(f"Saving new best model with mean step reward {mean_reward} to {self.save_path}")
-                self.model.save(self.save_path)
-                with open(self.save_path+".md", 'w') as f:
-                    f.write("mean step reward :"+str(mean_reward)+"\n")
-                    f.write("win rate :"+str(wins/self.episodes*100)+"%"+"\n")
-                    f.write("illegal moves :"+str(illegal_moves/(self.episodes * self.max_steps) *100)+"%"+"\n")
-
-# Create Sokoban environment
 barriers, player_x, player_y, box, goals = load_function_from_json('maps')
-env = SokobanEnv(playerXY=(player_x, player_y), barriers=barriers, boxes=box, goals=goals)
+env = SokobanEnv(playerXY=(player_x, player_y) , barriers=barriers , boxes=box , goals=goals)  # Instantiate your environment
 env.reset()
-
-# Wrap the environment
-env = DummyVecEnv([lambda: env])
-
-# Set a higher entropy coefficient (adjust the value as needed)
-ent_coef = 0.025
-
-model = PPO("MlpPolicy", env, verbose=1 , ent_coef = ent_coef , n_epochs=64)
-
-# Create a Sokoban environment for evaluation
-eval_env = SokobanEnv(playerXY=(player_x, player_y), barriers=barriers, boxes=box, goals=goals)
-eval_env.reset()
-eval_env = DummyVecEnv([lambda: eval_env])
-
-# Instantiate the SaveBestModelCallback
-name = 'sokoban'+str(random.randint(0, 1000))
-save_best_model_callback = SaveBestModelCallback(eval_env, eval_freq=10_000, save_path=f'models/best_model-{name}', episodes=10, max_steps=1000)
-
-# Train the model
-model.learn(total_timesteps=250_000 , progress_bar=True , log_interval=10 , callback=save_best_model_callback)
-
-# # Save the trained model
-# model.save("models/ppo_sokoban")
-
-# # Evaluate the trained model
-# mean_reward_list = []
-# max_episode_steps = 1000
-# tests = 25
-# wins = 0
-
-# for _ in range(tests):  # 10 evaluation episodes
-#     obs = env.reset()
-#     done = False
-#     total_reward = 0
-#     step_count = 0
-
-#     while not done:
-#         action, _ = model.predict(obs, deterministic=True)
-#         obs, reward, done, _ = env.step(action)
-#         env.render()
-#         total_reward += reward
-#         step_count += 1
-
-#         if done and reward == 1.0:
-#             wins += 1
-#             print(f"Win in {step_count} steps")
-
-#         if step_count >= max_episode_steps:
-#             done = True
-
-#     mean_reward_list.append(total_reward)
-
-# mean_reward = sum(mean_reward_list) / len(mean_reward_list)
-# print(f"Mean reward: {mean_reward}")
-# print(f"Win rate: {wins / tests * 100:.2f}%")
-
+agent = QLearningAgent(env)  # Create Q-learning agent
+agent.train(num_episodes=1000)  # Train the agent
+agent.save_q_table('q_table.npy')  # Save the Q-table to a file
