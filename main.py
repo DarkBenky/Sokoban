@@ -12,8 +12,9 @@ import torch.optim as optim
 INVALID_MOVE_PENALTY = -5
 PREFORMED_MOVE_PENALTY = -0.5
 WIN_REWARD = 100
-BOX_PUSH_REWARD = 1
+BOX_PUSH_REWARD = 1.5
 BOX_CLOSE_TO_GOAL_REWARD = 2.5
+PLAYER_CLOSE_TO_BOX_REWARD = 0.5
 TARGET_UPDATE = 10
 LEARNING_RATE = 0.001
 
@@ -214,8 +215,17 @@ class SokobanEnv:
                 # calculate the distance from the box to the goal
                 for goal in self.goals:
                     distance = np.linalg.norm(box - goal)
-                    if distance < 2:
+                    if distance < 3:
                         return True
+        return False
+    
+    def player_closer_to_box(self, previous_player_position, current_player_position):
+        for box in self.boxes:
+            if not np.array_equal(previous_player_position, current_player_position):
+                # calculate the distance from the box to the goal
+                distance = np.linalg.norm(current_player_position - box)
+                if distance < 3:
+                    return True
         return False
     
     def step(self, action):
@@ -223,6 +233,8 @@ class SokobanEnv:
         direction = self.get_direction_from_action(action)
         
         box_positions = self.boxes.copy()
+        
+        previous_player_position = self.playerXY.copy()
         
         success = self.move(direction)
 
@@ -240,6 +252,8 @@ class SokobanEnv:
                     reward += BOX_PUSH_REWARD
                     if self.box_closer_to_goal(box_positions , self.boxes):
                         reward += BOX_CLOSE_TO_GOAL_REWARD
+                if self.player_closer_to_box(previous_player_position , self.playerXY):
+                    reward += PLAYER_CLOSE_TO_BOX_REWARD
         else:
             reward = INVALID_MOVE_PENALTY
 
@@ -305,7 +319,7 @@ class DQNAgent:
         self.loss_fn = nn.MSELoss()
 
         self.discount_factor = 0.99
-        self.epsilon = 0.1
+        self.epsilon = 0.05
 
         self.replay_memory = ReplayMemory(replay_capacity)
         self.batch_size = batch_size
@@ -346,15 +360,17 @@ class DQNAgent:
         loss.backward()
         self.optimizer.step()
 
-    def train(self, num_episodes):
+    def train(self, num_episodes, reset_threshold=250_000):
+        best_average_reward = -float('inf')
+        best_episode = 0
+
         for episode in range(num_episodes):
             state = self.env.reset()
             done = False
             total_reward = 0
-            
-            verbose = 1_000
             current_step = 0
-            
+            verbose = 1_000
+
             while not done:
                 action = self.choose_action(state)
                 next_state, reward, done, _ = self.env.step(action)
@@ -363,15 +379,27 @@ class DQNAgent:
                 total_reward += reward
                 state = next_state
                 current_step += 1
-                
-                if verbose and current_step % verbose == 0:
-                    print(f"Episode {episode+1}/{num_episodes}, Total Reward: {total_reward} , Average Reward: {total_reward / current_step}")
-                
 
-            print(f"Episode {episode+1}/{num_episodes}, Total Reward: {total_reward}")
+                # Check for lack of progress
+                if current_step % reset_threshold == 0:
+                    if total_reward / current_step >= best_average_reward:
+                        best_average_reward = total_reward / current_step
+                    else:
+                        print(f"Resetting at episode {episode}, Total reward: {total_reward}, Best Average reward: {best_average_reward}")
+                        self.env.reset()
+                
+                # Log progress
+                if current_step % verbose == 0 and current_step > 0:
+                    print(f"Current step: {current_step}, Total reward: {total_reward}, Average reward: {total_reward / current_step}")
 
+            # Update target network periodically
             if episode % TARGET_UPDATE == 0:
                 self.target_net.load_state_dict(self.policy_net.state_dict())
+
+            # Print episode information
+            print(f"Episode {episode+1}/{num_episodes}, Total Reward: {total_reward}, Average Reward: {total_reward / current_step}")
+
+        print(f"Best average reward achieved: {best_average_reward} at episode {best_episode}")
 
     def save_q_network(self, path):
         torch.save(self.policy_net.state_dict(), path)
@@ -385,6 +413,6 @@ class DQNAgent:
 barriers, player_x, player_y, box, goals = load_function_from_json('maps')
 env = SokobanEnv(playerXY=(player_x, player_y) , barriers=barriers , boxes=box , goals=goals)  # Instantiate environment
 env.reset()
-agent = DQNAgent(env, replay_capacity=100_000 , batch_size=32)  # Instantiate agent
+agent = DQNAgent(env, replay_capacity=100_000 , batch_size=48)  # Instantiate agent
 agent.train(num_episodes=1000)  # Train the agent
-agent.save_q_table('q_table.npy')  # Save the Q-table to a file
+agent.save_q_table('q_table.npy')  # Save the NN weights to a file
