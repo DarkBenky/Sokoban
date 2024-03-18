@@ -1,13 +1,13 @@
-import gym
 import random
 import os
 import numpy as np
 import json
-import time
+# import time
 from PIL import Image, ImageDraw
 import torch
 import torch.nn as nn
 import torch.optim as optim
+# from numba import jit
 
 INVALID_MOVE_PENALTY = -5
 PREFORMED_MOVE_PENALTY = -0.5
@@ -15,6 +15,7 @@ WIN_REWARD = 100
 BOX_PUSH_REWARD = 1
 BOX_CLOSE_TO_GOAL_REWARD = 2.5
 TARGET_UPDATE = 10
+LEARNING_RATE = 0.001
 
 from collections import namedtuple
 
@@ -82,6 +83,8 @@ class SokobanEnv:
 
         return arena
     
+    # @staticmethod
+    # @jit(nopython=True)
     def create_observation(self):
         obs = np.zeros((self.arena.shape[0], self.arena.shape[1], 5), dtype=np.int8)
     
@@ -106,6 +109,8 @@ class SokobanEnv:
             
         return obs
     
+    # @staticmethod
+    # @jit(nopython=True)
     def get_direction_to_dx_dy(self, direction):
         if direction == 'W':
             return -1, 0
@@ -116,6 +121,8 @@ class SokobanEnv:
         elif direction == 'D':
             return 0, 1
 
+    # @staticmethod
+    # @jit(nopython=True)
     def move(self, direction , execute = True):
         new_player_position = self.playerXY.copy()
 
@@ -148,14 +155,20 @@ class SokobanEnv:
                     return True
         return False
 
+    # @staticmethod
+    # @jit(nopython=True)
     def is_valid_move(self, position):
         return (0 <= position[0] < self.arena.shape[0] and
                 0 <= position[1] < self.arena.shape[1] and
                 self.arena[position[0]][position[1]] != 1)
 
+    # @staticmethod
+    # @jit(nopython=True)
     def is_win(self):
         return all(np.any(np.all(self.boxes == goal, axis=1) for goal in self.goals))
     
+    # @staticmethod
+    # @jit(nopython=True)
     def is_box_collision(self, new_box_position):
         # Check if the new box position collides with any other boxes or barriers
         if len(self.barriers) > 0:
@@ -171,6 +184,8 @@ class SokobanEnv:
     def render(self):
         pass
     
+    # @staticmethod
+    # @jit(nopython=True)
     def valid_moves(self):
         possible_moves = ['W', 'S', 'A', 'D']
         valid_moves = []
@@ -190,7 +205,9 @@ class SokobanEnv:
             return 'A'
         elif action == 3:
             return 'D'
-        
+    
+    # @staticmethod
+    # @jit(nopython=True)
     def box_closer_to_goal(self, previous_box_positions, current_box_positions):
         for box in current_box_positions:
             if not any(np.array_equal(box, prev_box) for prev_box in previous_box_positions):
@@ -239,20 +256,6 @@ class SokobanEnv:
 
         return self.arena
 
-class DQN(nn.Module):
-    def __init__(self, input_dim, output_dim):
-        super(DQN, self).__init__()
-        self.fc1 = nn.Linear(input_dim, 64)
-        self.fc2 = nn.Linear(64, 64)
-        self.fc3 = nn.Linear(64, output_dim)
-
-    def forward(self, x):
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
-
-
 class ReplayMemory:
     def __init__(self, capacity):
         self.capacity = capacity
@@ -261,8 +264,9 @@ class ReplayMemory:
 
     def push(self, transition):
         if len(self.memory) < self.capacity:
-            self.memory.append(None)
-        self.memory[self.position] = transition
+            self.memory.append(transition)
+        else:
+            self.memory[self.position] = transition
         self.position = (self.position + 1) % self.capacity
 
     def sample(self, batch_size):
@@ -271,31 +275,50 @@ class ReplayMemory:
     def __len__(self):
         return len(self.memory)
 
+class DQN(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super(DQN, self).__init__()
+        self.fc1 = nn.Linear(input_dim, 128)
+        self.fc2 = nn.Linear(128, 128)
+        self.fc3 = nn.Linear(128, 128)
+        self.fc4 = nn.Linear(128, output_dim)  # Output dimension matches the number of actions
+
+    def forward(self, x):
+        # Flatten the input tensor to be compatible with fully connected layers
+        x = x.view(x.size(0), -1)
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        x = torch.relu(self.fc3(x))
+        x = self.fc4(x)
+        return x
+
+
 class DQNAgent:
     def __init__(self, env, replay_capacity=10000, batch_size=32):
-            self.env = env
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            self.policy_net = DQN(env.arena.shape[0], env.action_space.shape[0]).to(self.device)
-            self.target_net = DQN(env.arena.shape[0], env.action_space.shape[0]).to(self.device)
-            self.target_net.load_state_dict(self.policy_net.state_dict())
-            self.target_net.eval()
-            self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.001)
-            self.loss_fn = nn.MSELoss()
+        self.env = env
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.policy_net = DQN(np.prod(env.arena.shape), len(env.action_space)).to(self.device)
+        self.target_net = DQN(np.prod(env.arena.shape), len(env.action_space)).to(self.device)
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.target_net.eval()
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=LEARNING_RATE)
+        self.loss_fn = nn.MSELoss()
 
-            self.discount_factor = 0.99
-            self.epsilon = 0.2
+        self.discount_factor = 0.99
+        self.epsilon = 0.1
 
-            self.replay_memory = ReplayMemory(replay_capacity)
-            self.batch_size = batch_size
+        self.replay_memory = ReplayMemory(replay_capacity)
+        self.batch_size = batch_size
 
     def choose_action(self, state):
         if np.random.rand() < self.epsilon:
             return np.random.choice(self.env.action_space)
         else:
             with torch.no_grad():
-                state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(self.device)
+                state_tensor = torch.tensor(state, dtype=torch.float32).to(self.device)
+                state_tensor = state_tensor.unsqueeze(0)  # Add batch dimension
                 q_values = self.policy_net(state_tensor)
-                return q_values.argmax().item()
+                return q_values.argmax().item()  # Return the action with the highest Q-value
 
     def learn(self):
         if len(self.replay_memory) < self.batch_size:
@@ -304,13 +327,15 @@ class DQNAgent:
         transitions = self.replay_memory.sample(self.batch_size)
         batch = Transition(*zip(*transitions))
 
-        state_batch = torch.tensor(batch.state, dtype=torch.float32).to(self.device)
+        state_batch = torch.tensor(np.array(batch.state), dtype=torch.float32).to(self.device)
         action_batch = torch.tensor(batch.action, dtype=torch.long).to(self.device)
         reward_batch = torch.tensor(batch.reward, dtype=torch.float32).to(self.device)
-        next_state_batch = torch.tensor(batch.next_state, dtype=torch.float32).to(self.device)
+        next_state_batch = torch.tensor(np.array(batch.next_state), dtype=torch.float32).to(self.device)
         done_batch = torch.tensor(batch.done, dtype=torch.float32).to(self.device)
 
-        q_values = self.policy_net(state_batch).gather(1, action_batch.unsqueeze(1))
+        q_values = self.policy_net(state_batch)
+        q_values = q_values.gather(1, action_batch.unsqueeze(1))
+
         with torch.no_grad():
             next_q_values = self.target_net(next_state_batch).max(1)[0].unsqueeze(1)
             expected_q_values = reward_batch + self.discount_factor * next_q_values * (1 - done_batch)
@@ -326,7 +351,10 @@ class DQNAgent:
             state = self.env.reset()
             done = False
             total_reward = 0
-
+            
+            verbose = 1_000
+            current_step = 0
+            
             while not done:
                 action = self.choose_action(state)
                 next_state, reward, done, _ = self.env.step(action)
@@ -334,6 +362,11 @@ class DQNAgent:
                 self.learn()
                 total_reward += reward
                 state = next_state
+                current_step += 1
+                
+                if verbose and current_step % verbose == 0:
+                    print(f"Episode {episode+1}/{num_episodes}, Total Reward: {total_reward} , Average Reward: {total_reward / current_step}")
+                
 
             print(f"Episode {episode+1}/{num_episodes}, Total Reward: {total_reward}")
 
@@ -347,10 +380,11 @@ class DQNAgent:
         self.policy_net.load_state_dict(torch.load(path))
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
+        
 
 barriers, player_x, player_y, box, goals = load_function_from_json('maps')
-env = SokobanEnv(playerXY=(player_x, player_y) , barriers=barriers , boxes=box , goals=goals)  # Instantiate your environment
+env = SokobanEnv(playerXY=(player_x, player_y) , barriers=barriers , boxes=box , goals=goals)  # Instantiate environment
 env.reset()
-agent = DQNAgent(env)  # Instantiate your agent
+agent = DQNAgent(env, replay_capacity=100_000 , batch_size=32)  # Instantiate agent
 agent.train(num_episodes=1000)  # Train the agent
 agent.save_q_table('q_table.npy')  # Save the Q-table to a file
