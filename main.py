@@ -355,7 +355,7 @@ class DQN(nn.Module):
 
 
 class DQNAgent:
-    def __init__(self, env, replay_capacity=10000, batch_size=32, epsilon_start=1.0, epsilon_end=0.01, epsilon_decay=0.000_000_1 , strategy='linear'):
+    def __init__(self, env, replay_capacity=10000, batch_size=32, epsilon_start=1.0, epsilon_end=0.01, epsilon_decay=0.000_001 , strategy='linear'):
         self.env = env
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.policy_net = DQN(np.prod(env.arena.shape), len(env.action_space)).to(self.device)
@@ -378,6 +378,8 @@ class DQNAgent:
         self.batch_size = batch_size
 
     def choose_action(self, state):
+        self.step_number += 1
+        
         if self.strategy == 'linear':
             self.epsilon = max(self.epsilon_end, self.epsilon - self.epsilon_decay)
         elif self.strategy == 'exponential':
@@ -404,8 +406,6 @@ class DQNAgent:
             return action.item()
         else:
             raise ValueError('Invalid strategy')
-        
-        self.step_number += 1
         
         with torch.no_grad():
             state_tensor = torch.tensor(state, dtype=torch.float32).to(self.device)
@@ -535,6 +535,6 @@ class DQNAgent:
 barriers, player_x, player_y, box, goals = load_function_from_json('maps')
 env = SokobanEnv(playerXY=(player_x, player_y) , barriers=barriers , boxes=box , goals=goals)  # Instantiate environment
 env.reset()
-agent = DQNAgent(env, replay_capacity=10_000_000 , batch_size=10_000)  # Instantiate agent
+agent = DQNAgent(env, replay_capacity=10_000_000 , batch_size=10_000, strategy='epsilon_greedy')  # Instantiate agent
 agent.train(num_episodes=1000)  # Train the agent
 agent.save_q_table('DQN')  # Save the NN weights to a file
