@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import math
+import pprint
 import pygame
 # from numba import jit
 
@@ -68,10 +69,50 @@ class SokobanEnv:
         self.goals = np.array(goals)
         self.barriers = np.array(barriers)
         self.arena = self.construct_arena()
-        
+        self.obs = self.construct_obs()
+               
         self.action_space = np.array([0, 1, 2, 3])
         
         self.running = False
+        
+    def generate_heatmap(self,size=(10,10),coordinates = (0,0)):
+        heatmap = np.zeros(size)
+        for i in range(size[0]):
+            for j in range(size[1]):
+                distance = np.linalg.norm(np.array([i,j]) - np.array(coordinates))
+                heatmap[i][j] = distance
+        
+        for barrier in self.barriers:
+            heatmap[barrier[0]][barrier[1]] = np.inf        
+        
+        return heatmap
+
+    def construct_obs(self):
+        arena = self.arena.copy()
+        valid_moves = self.valid_moves()
+        
+        box_heatmap = []
+        for box in self.boxes:
+            box_heatmap.append(self.generate_heatmap(size=(10,10),coordinates=box))
+        
+        # average out the box_heatmap
+        box_heatmap = np.mean(box_heatmap , axis = 0)
+        
+        finish_heatmap = []
+        for finish in self.goals:
+            finish_heatmap.append(self.generate_heatmap(size=(10,10),coordinates=finish))
+        
+        finish_heatmap = np.mean(finish_heatmap , axis = 0)
+        
+        player_heatmap = self.generate_heatmap(size=(10,10),coordinates=self.playerXY)
+        
+        # create average between box_heatmap , finish_heatmap and player_heatmap
+        player_box_map = (box_heatmap + player_heatmap) / 2
+        player_finish_map = (finish_heatmap + player_heatmap) / 2
+        box_finish_map = (box_heatmap + finish_heatmap) / 2
+
+        return np.array([arena, valid_moves , player_box_map , player_finish_map , box_finish_map])
+        
 
     def construct_arena(self):
         arena = np.zeros((10, 10))
@@ -112,33 +153,7 @@ class SokobanEnv:
                 else:
                     return False
         return True
-    
-    # @staticmethod
-    # @jit(nopython=True)
-    def get_direction_to_dx_dy(self, direction):
-        if direction == 'W':
-            return -1, 0
-        elif direction == 'S':
-            return 1, 0
-        elif direction == 'A':
-            return 0, -1
-        elif direction == 'D':
-            return 0, 1
-    
-        
-    def is_box_close_to_goal(self):
-        for box in self.boxes:
-            for goal in self.goals:
-                if np.linalg.norm(box - goal) == 1:
-                    # Check if there's an empty space next to the goal
-                    for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
-                        next_pos = goal + np.array([dx, dy])
-                        if np.all(next_pos == box):
-                            return True
-        return False
 
-    # @staticmethod
-    # @jit(nopython=True)
     def move(self, direction , execute = True):
         new_player_position = self.playerXY.copy()
 
@@ -171,20 +186,14 @@ class SokobanEnv:
                     return True
         return False
 
-    # @staticmethod
-    # @jit(nopython=True)
     def is_valid_move(self, position):
         return (0 <= position[0] < self.arena.shape[0] and
                 0 <= position[1] < self.arena.shape[1] and
                 self.arena[position[0]][position[1]] != 1)
 
-    # @staticmethod
-    # @jit(nopython=True)
     def is_win(self):
         return all(np.any(np.all(self.boxes == goal, axis=1) for goal in self.goals))
-    
-    # @staticmethod
-    # @jit(nopython=True)
+
     def is_box_collision(self, new_box_position):
         # Check if the new box position collides with any other boxes or barriers
         if len(self.barriers) > 0:
@@ -197,11 +206,6 @@ class SokobanEnv:
             barrier_collision
         )
     
-    def render(self):
-        pass
-    
-    # @staticmethod
-    # @jit(nopython=True)
     def valid_moves(self):
         possible_moves = ['W', 'S', 'A', 'D']
         valid_moves = []
@@ -221,9 +225,7 @@ class SokobanEnv:
             return 'A'
         elif action == 3:
             return 'D'
-    
-    # @staticmethod
-    # @jit(nopython=True)
+
     def box_closer_to_goal(self, previous_box_positions, current_box_positions):
         for box in current_box_positions:
             if not any(np.array_equal(box, prev_box) for prev_box in previous_box_positions):
@@ -243,66 +245,41 @@ class SokobanEnv:
                     return True
         return False
     
-    def reverse_direction(self, direction):
-        if direction == 'W':
-            return 'S'
-        elif direction == 'S':
-            return 'W'
-        elif direction == 'A':
-            return 'D'
-        elif direction == 'D':
-            return 'A'
     
     def step(self, action):
         # Take a step in the environment based on the selected action
         direction = self.get_direction_from_action(action)
 
-        checkpoint = self.is_box_close_to_goal()
+        box_positions = self.boxes.copy()
+        previous_player_position = self.playerXY.copy()
+        success = self.move(direction)
 
-        if checkpoint:
-            if self.move(direction):
-                if self.is_win():
-                    return self.reset() , WIN_REWARD , True, {}
-                else:
-                    if self.is_box_close_to_goal():
-                        self.arena = self.construct_arena()
-                        return self.arena , BOX_CLOSE_TO_GOAL_REWARD, False, {}
-                    else:
-                        direction = self.reverse_direction(direction)
-                        self.move(direction)
-                        self.arena = self.construct_arena()
-                        return self.arena , BOX_CLOSE_TO_GOAL_REWARD, False, {}
+        done = False
+        reward = 0
+
+        if success:
+            self.arena = self.construct_arena()
+            self.obs = self.construct_obs()
+            if self.is_win():
+                reward = WIN_REWARD
+                print('WIN')
+                done = True
             else:
-                return self.arena, INVALID_MOVE_PENALTY, False, {}
+                if self.box_is_movable() == False:
+                    self.reset()
+                    return self.obs, STACKED_BOX, True, {}
+
+                reward += PREFORMED_MOVE_PENALTY
+                if np.any(self.boxes != box_positions):
+                    reward += BOX_PUSH_REWARD
+                    if self.box_closer_to_goal(box_positions , self.boxes):
+                        reward += BOX_CLOSE_TO_GOAL_REWARD
+                if self.player_closer_to_box(previous_player_position , self.playerXY):
+                    reward += PLAYER_CLOSE_TO_BOX_REWARD
         else:
-            box_positions = self.boxes.copy()
-            previous_player_position = self.playerXY.copy()
-            success = self.move(direction)
-
-            done = False
-            reward = 0
-
-            if success:
-                self.arena = self.construct_arena()
-                if self.is_win():
-                    reward = WIN_REWARD
-                    print('WIN')
-                    done = True
-                else:
-                    if self.box_is_movable() == False:
-                        return self.reset(), STACKED_BOX, True, {}
-
-                    reward += PREFORMED_MOVE_PENALTY
-                    if np.any(self.boxes != box_positions):
-                        reward += BOX_PUSH_REWARD
-                        if self.box_closer_to_goal(box_positions , self.boxes):
-                            reward += BOX_CLOSE_TO_GOAL_REWARD
-                    if self.player_closer_to_box(previous_player_position , self.playerXY):
-                        reward += PLAYER_CLOSE_TO_BOX_REWARD
-            else:
-                reward = INVALID_MOVE_PENALTY
-
-            return self.arena, reward, done, {}
+            reward = INVALID_MOVE_PENALTY
+        
+        return self.obs, reward, done, {}
     
     def reset(self):
         barriers, player_x, player_y, box, goals = load_function_from_json('maps')
@@ -312,6 +289,7 @@ class SokobanEnv:
         self.boxes = np.array(box)
         self.goals = np.array(goals)
         self.arena = self.construct_arena()
+        self.obs = self.construct_obs()
 
         return self.arena
 
