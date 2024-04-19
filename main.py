@@ -14,7 +14,7 @@ import pprint
 import pygame
 # from numba import jit
 
-INVALID_MOVE_PENALTY = -5
+INVALID_MOVE_PENALTY = -2
 PREFORMED_MOVE_PENALTY = -0.5
 STACKED_BOX = -10
 WIN_REWARD = 100
@@ -69,35 +69,35 @@ class SokobanEnv:
         self.goals = np.array(goals)
         self.barriers = np.array(barriers)
         self.arena = self.construct_arena()
-        self.obs = self.construct_obs()
-               
+        self.obs = self.construct_obs()      
         self.action_space = np.array([0, 1, 2, 3])
-        
-        self.running = False
-        
-    def generate_heatmap(self, size=(10, 10), coordinates=(0, 0)):
+        self.last_box_move = 0
+        self.step_count = 0
+              
+    def generate_heatmap(self, size=(10, 10), coordinates=(0, 0) , player = True):
         heatmap = np.zeros(size)  # Initialize an array to store the heatmap
         for i in range(size[0]):
             for j in range(size[1]):
+                if i == coordinates[0] and j == coordinates[1] and player:
+                    # Set the distance to 0 if the current position is the same as the given coordinates
+                    heatmap[i][j] = 0
+                    continue
                 # Calculate the distance between the current position and the given coordinates
                 distance = np.linalg.norm(np.array([i, j]) - np.array(coordinates))
-                heatmap[i][j] = distance  # Store the distance in the heatmap array
+                heatmap[i][j] = 1 / (distance + 1)  # Store the distance in the heatmap array
         
         # Set the distance to infinity for positions where barriers are present
         for barrier in self.barriers:
-            heatmap[barrier[0]][barrier[1]] = np.inf
+            heatmap[barrier[0]][barrier[1]] = INVALID_MOVE_PENALTY
             
         return heatmap
 
 
     def construct_obs(self):
-        arena = self.arena.copy()  # Create a copy of the game arena
-        valid_moves = self.valid_moves()  # Get valid moves for the player
-        
         box_heatmap = []
         for box in self.boxes:
             # Generate a heatmap for each box's position and append it to the list
-            box_heatmap.append(self.generate_heatmap(size=(10, 10), coordinates=box))
+            box_heatmap.append(self.generate_heatmap(size=(10, 10), coordinates=box , player = False))
         
         # Compute the average of all box heatmaps
         box_heatmap = np.mean(box_heatmap, axis=0)
@@ -105,49 +105,26 @@ class SokobanEnv:
         finish_heatmap = []
         for finish in self.goals:
             # Generate a heatmap for each goal's position and append it to the list
-            finish_heatmap.append(self.generate_heatmap(size=(10, 10), coordinates=finish))
+            finish_heatmap.append(self.generate_heatmap(size=(10, 10), coordinates=finish , player = False))
         
         # Compute the average of all finish heatmaps
         finish_heatmap = np.mean(finish_heatmap, axis=0)
         
         # Generate a heatmap for the player's position
-        player_heatmap = self.generate_heatmap(size=(10, 10), coordinates=self.playerXY)
+        player_heatmap = self.generate_heatmap(size=(10, 10), coordinates=self.playerXY , player = True)
         
         # Create average between box_heatmap, finish_heatmap, and player_heatmap
-        player_box_map = (box_heatmap + player_heatmap) / 2
-        player_finish_map = (finish_heatmap + player_heatmap) / 2
+        player_box_map = (box_heatmap + player_heatmap) / 4
+        # player_finish_map = (finish_heatmap + player_heatmap) / 2
         box_finish_map = (box_heatmap + finish_heatmap) / 2
         
-        dx_dy = np.array([[-1, 0], [1, 0], [0, -1], [0, 1]])
-        player_position = self.playerXY
+        final_obs = (player_box_map + box_finish_map) / 2
         
-        reward_player_box = []
-        reward_player_finish = []
-
-        # Compute rewards for possible moves
-        for i in range(4):
-            dx, dy = dx_dy[i]
-            new_player_x, new_player_y = player_position[0] + dx, player_position[1] + dy
-            if new_player_x >= 0 and new_player_x < 10 and new_player_y >= 0 and new_player_y < 10:
-                # If the move is within the boundaries, append the corresponding heatmap value to the reward lists
-                reward_player_box.append(player_box_map[new_player_x][new_player_y])
-                reward_player_finish.append(player_finish_map[new_player_x][new_player_y])
-            else:
-                # If the move is outside the boundaries, append infinity to the reward lists
-                reward_player_box.append(np.inf)
-                reward_player_finish.append(np.inf)
-
-
-        data = np.zeros((10, 10))
-        # fill data with the values of the reward_player_box (len = 4), reward_player_finish (len = 4) , valid_moves (len = 4)
-        data[0][0:4] = reward_player_box
-        data[1][0:4]  = reward_player_finish
-        data[0][0:4]  = valid_moves
-        
-        # Return an array containing various observation matrices
-        return np.array([arena, player_box_map, player_finish_map, box_finish_map, data])
-
-        
+        return np.array(final_obs)
+    
+    
+    
+    
 
     def construct_arena(self):
         arena = np.zeros((10, 10))
@@ -165,31 +142,10 @@ class SokobanEnv:
 
         return arena
     
-    def box_is_movable(self,):
-        corner_positions = [(0, 0), (9, 9), (0, 9), (9, 0)]
-        if np.any(np.all(np.isin(self.boxes, corner_positions), axis=1)):
-            return False
-        for box in self.boxes:
-            corner_list = [ ((1,0),(0,1)), ((1,0),(0,-1)),
-                           ((-1,0),(0,1)), ((-1,0),(0,-1)) ]
 
-            for corner in corner_list:
-                corner1_dx, corner1_dy = corner[0]
-                corner2_dx, corner2_dy = corner[1]
-                corner1_x, corner1_y = box[0] + corner1_dx, box[1] + corner1_dy
-                corner2_x, corner2_y = box[0] + corner2_dx, box[1] + corner2_dy
-                
-                if (corner1_x >= 0 and corner1_x < 10) and (corner1_y >= 0 and corner1_y < 10) and (corner2_x >= 0 and corner2_x < 10) and (corner2_y >= 0 and corner2_y < 10):
-                    try:    
-                        if self.arena[corner1_x][corner1_y] == 1 and self.arena[corner2_x][corner2_y] == 1:
-                            return False
-                    except IndexError:
-                        return False
-                else:
-                    return False
-        return True
 
     def move(self, direction , execute = True):
+        self.step_count += 1
         new_player_position = self.playerXY.copy()
 
         if direction == 'W':
@@ -210,6 +166,7 @@ class SokobanEnv:
                 if execute:
                     self.boxes[box_index] = new_box_position
                     self.playerXY = new_player_position
+                    self.last_box_move = self.step_count
                 return True
             else:
                 return False
@@ -263,32 +220,12 @@ class SokobanEnv:
         elif action == 3:
             return 'D'
 
-    def box_closer_to_goal(self, previous_box_positions, current_box_positions):
-        for box in current_box_positions:
-            if not any(np.array_equal(box, prev_box) for prev_box in previous_box_positions):
-                # calculate the distance from the box to the goal
-                for goal in self.goals:
-                    distance = np.linalg.norm(box - goal)
-                    if distance < 3:
-                        return True
-        return False
-    
-    def player_closer_to_box(self, previous_player_position, current_player_position):
-        for box in self.boxes:
-            if not np.array_equal(previous_player_position, current_player_position):
-                # calculate the distance from the box to the goal
-                distance = np.linalg.norm(current_player_position - box)
-                if distance < 3:
-                    return True
-        return False
-    
     
     def step(self, action):
         # Take a step in the environment based on the selected action
         direction = self.get_direction_from_action(action)
 
-        box_positions = self.boxes.copy()
-        previous_player_position = self.playerXY.copy()
+        previous_obs = self.obs.copy()
         success = self.move(direction)
 
         done = False
@@ -302,17 +239,9 @@ class SokobanEnv:
                 print('WIN')
                 done = True
             else:
-                if self.box_is_movable() == False:
-                    self.reset()
-                    return self.obs, STACKED_BOX, True, {}
-
-                reward += PREFORMED_MOVE_PENALTY
-                if np.any(self.boxes != box_positions):
-                    reward += BOX_PUSH_REWARD
-                    if self.box_closer_to_goal(box_positions , self.boxes):
-                        reward += BOX_CLOSE_TO_GOAL_REWARD
-                if self.player_closer_to_box(previous_player_position , self.playerXY):
-                    reward += PLAYER_CLOSE_TO_BOX_REWARD
+                self.obs = self.construct_obs()
+                reward = previous_obs[self.playerXY[0]][self.playerXY[1]]
+                return self.obs, reward, done, {}
         else:
             reward = INVALID_MOVE_PENALTY
         
@@ -354,9 +283,9 @@ class DQN(nn.Module):
         super(DQN, self).__init__()
         self.input_dim = input_dim
         self.fc1 = nn.Linear(input_dim, 128)
-        self.fc2 = nn.Linear(128, 256)
-        self.fc3 = nn.Linear(256, 256)
-        self.fc4 = nn.Linear(256, 128)
+        self.fc2 = nn.Linear(128, 128)
+        self.fc3 = nn.Linear(128, 128)
+        self.fc4 = nn.Linear(128, 128)
         self.fc5 = nn.Linear(128, output_dim)  # Output dimension matches the number of actions
 
     def forward(self, x):
@@ -372,7 +301,7 @@ class DQN(nn.Module):
 
 
 class DQNAgent:
-    def __init__(self, env, replay_capacity=10000, batch_size=32, epsilon_start=1.0, epsilon_end=0.01, epsilon_decay=0.000_001 , strategy='linear'):
+    def __init__(self, env: SokobanEnv, replay_capacity=10000, batch_size=32, epsilon_start=1.0, epsilon_end=0.01, epsilon_decay=0.000_001 , strategy='linear'):
         self.env = env
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.policy_net = DQN(np.prod(env.obs.shape), len(env.action_space)).to(self.device)
@@ -474,7 +403,7 @@ class DQNAgent:
             done = False
             total_reward = 0
             current_step = 0
-            verbose = 1_000
+            verbose = 250
 
             while not done:
                 
@@ -490,18 +419,19 @@ class DQNAgent:
                 state = next_state
                 current_step += 1
 
-                # Check for lack of progress
-                if current_step % reset_threshold == 0:
-                    if total_reward / current_step >= best_average_reward:
-                        best_average_reward = total_reward / current_step
-                    else:
-                        print(f"Resetting at episode {episode}, Total reward: {total_reward}, Best Average reward: {best_average_reward}")
-                        self.env.reset()
+                if env.step_count - env.last_box_move > reset_threshold:
+                    env.step_count = 0
+                    env.last_box_move = 0
+                    print("Resetting environment")
+                    self.env.reset()
+                    self.target_net.load_state_dict(self.policy_net.state_dict())
+                    done = True
                 
                 # Log progress
                 if current_step % verbose == 0 and current_step > 0:
                     print(f"Current step: {current_step}, Total reward: {total_reward}, Average reward: {total_reward / current_step}")
                     print(f"Epsilon : {self.epsilon}")
+                    self.target_net.load_state_dict(self.policy_net.state_dict())
 
                 """ arena is 10*10 grid
                 player == 4
@@ -511,9 +441,10 @@ class DQNAgent:
                 empty space == 0
                 """
                 arena = self.env.arena
+                obs = self.env.obs
                 
                 # render this arena
-                block_size = screen_width // 10
+                block_size = screen_width // 20
                 
                 for i in range(10):
                     for j in range(10):
@@ -528,13 +459,21 @@ class DQNAgent:
                         else:
                             pygame.draw.rect(screen, (0, 0, 0), (block_size * i, block_size * j, block_size, block_size))
                             
-                pygame.display.flip()  # Update display
-
-
-            # Update target network periodically
-            if episode % TARGET_UPDATE == 0:
-                self.target_net.load_state_dict(self.policy_net.state_dict())
-
+                for i in range(10):
+                    for j in range(10):
+                        obs_val = obs[i][j]
+                        if obs_val < 0:
+                            color = (255, 255, 255)
+                        else:
+                            color = (200*obs_val, 80*obs_val*1.2, 50*obs_val*1.5)
+                        # draw text on screen with value of obs
+                        font = pygame.font.Font(None, 12)
+                        text = font.render(str(round(obs_val, 2)), True, (128, 128, 255))
+                        screen.blit(text, (block_size * i + 10, block_size * j + 10))
+                        pygame.draw.rect(screen, color, (block_size * i + 10 * block_size, block_size * j, block_size, block_size))
+                        
+                pygame.display.flip()
+                
             # Print episode information
             print(f'Epsilon :{self.epsilon}')
             print(f"Episode {episode+1}/{num_episodes}, Total Reward: {total_reward}, Average Reward: {total_reward / current_step}")
@@ -554,6 +493,6 @@ barriers, player_x, player_y, box, goals = load_function_from_json('maps')
 env = SokobanEnv(playerXY=(player_x, player_y) , barriers=barriers , boxes=box , goals=goals)  # Instantiate environment
 env.reset()
 # print(env.obs)
-agent = DQNAgent(env, replay_capacity=10_000_000 , batch_size=10_000, strategy='epsilon_greedy' , epsilon_start=0.2)  # Instantiate agent
-agent.train(num_episodes=1000)  # Train the agent
+agent = DQNAgent(env, replay_capacity=1_000_000 , batch_size=1000, strategy='epsilon_greedy' , epsilon_start=0.05)  # Instantiate agent
+agent.train(num_episodes=1000 , reset_threshold=1000)  # Train the agent
 agent.save_q_table('DQN')  # Save the NN weights to a file
