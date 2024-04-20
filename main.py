@@ -22,7 +22,8 @@ BOX_PUSH_REWARD = 1.5
 BOX_CLOSE_TO_GOAL_REWARD = 2.5
 PLAYER_CLOSE_TO_BOX_REWARD = 0.5
 TARGET_UPDATE = 10
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.05
+BOX_NEAR_BARRIER_PENALTY = 0.125
 
 from collections import namedtuple
 
@@ -74,57 +75,102 @@ class SokobanEnv:
         self.last_box_move = 0
         self.step_count = 0
               
-    def generate_heatmap(self, size=(10, 10), coordinates=(0, 0) , player = True):
-        heatmap = np.zeros(size)  # Initialize an array to store the heatmap
+    def generate_heatmap(self, size=(10, 10), coordinates=(0, 0), player=True):
+        heatmap = np.zeros(size)
         for i in range(size[0]):
             for j in range(size[1]):
                 if i == coordinates[0] and j == coordinates[1] and player:
-                    # Set the distance to 0 if the current position is the same as the given coordinates
                     heatmap[i][j] = 0
                     continue
-                # Calculate the distance between the current position and the given coordinates
                 distance = np.linalg.norm(np.array([i, j]) - np.array(coordinates))
-                heatmap[i][j] = 1 / (distance + 1)  # Store the distance in the heatmap array
+                heatmap[i][j] = 1 / ((distance * distance) + 1)
         
-        # Set the distance to infinity for positions where barriers are present
         for barrier in self.barriers:
             heatmap[barrier[0]][barrier[1]] = INVALID_MOVE_PENALTY
             
         return heatmap
 
-
     def construct_obs(self):
-        box_heatmap = []
+        # Initialize empty heatmaps for boxes and goals
+        box_heatmap = np.zeros((10, 10))
+        goal_heatmap = np.zeros((10, 10))
+        
+        # Calculate distance from each position to boxes and sum them up
         for box in self.boxes:
-            # Generate a heatmap for each box's position and append it to the list
-            box_heatmap.append(self.generate_heatmap(size=(10, 10), coordinates=box , player = False))
+            box_heatmap += self.generate_heatmap(coordinates=box, player=False)
         
-        # Compute the average of all box heatmaps
-        box_heatmap = np.mean(box_heatmap, axis=0)
+        # Calculate distance from each position to goals and sum them up
+        for goal in self.goals:
+            goal_heatmap += self.generate_heatmap(coordinates=goal, player=False)
         
-        finish_heatmap = []
-        for finish in self.goals:
-            # Generate a heatmap for each goal's position and append it to the list
-            finish_heatmap.append(self.generate_heatmap(size=(10, 10), coordinates=finish , player = False))
+        # Calculate player heatmap
+        player_heatmap = self.generate_heatmap(coordinates=self.playerXY, player=True)
         
-        # Compute the average of all finish heatmaps
-        finish_heatmap = np.mean(finish_heatmap, axis=0)
+        # Penalize positions with barriers
+        for barrier in self.barriers:
+            box_heatmap[barrier[0]][barrier[1]] = INVALID_MOVE_PENALTY
+            goal_heatmap[barrier[0]][barrier[1]] = INVALID_MOVE_PENALTY
+            player_heatmap[barrier[0]][barrier[1]] = INVALID_MOVE_PENALTY
         
-        # Generate a heatmap for the player's position
-        player_heatmap = self.generate_heatmap(size=(10, 10), coordinates=self.playerXY , player = True)
+        # Normalize heatmaps
+        box_heatmap /= np.max(box_heatmap)
+        goal_heatmap /= np.max(goal_heatmap)
+        player_heatmap /= np.max(player_heatmap)
         
-        # Create average between box_heatmap, finish_heatmap, and player_heatmap
-        player_box_map = (box_heatmap + player_heatmap) / 4
-        # player_finish_map = (finish_heatmap + player_heatmap) / 2
-        box_finish_map = (box_heatmap + finish_heatmap) / 2
+        # Calculate the distance of each position to the nearest box
+        min_box_distance = np.min(box_heatmap, axis=(0, 1))
         
-        final_obs = (player_box_map + box_finish_map) / 2
+        # Penalize positions closer to the finish without nearby boxes
+        penalty_factor = 0.5  # Adjust this factor as needed
+        goal_heatmap -= penalty_factor * (1 - min_box_distance)
         
-        return np.array(final_obs)
-    
-    
-    
-    
+        # Combine heatmaps to create final observation
+        final_obs = (box_heatmap + goal_heatmap + player_heatmap) / 3
+        
+        dxdy = np.array([[0, 1], [0, -1], [1, 0], [-1, 0]])
+        for box in self.boxes:
+            final_obs[box[0]][box[1]] += BOX_PUSH_REWARD
+            if np.any(np.all(self.goals == box, axis=1)):
+                final_obs[box[0]][box[1]] += BOX_CLOSE_TO_GOAL_REWARD
+            for dx, dy in dxdy:
+                new_position = box + np.array([dx, dy])
+                if self.is_valid_move(new_position) and not self.is_box_collision(new_position):
+                    final_obs[new_position[0]][new_position[1]] += BOX_CLOSE_TO_GOAL_REWARD / 4
+            
+            # Check if the box move is close to barriers and penalize
+            for barrier in self.barriers:
+                for dx, dy in dxdy:
+                    near_barrier = box + np.array([dx, dy])
+                    if np.all(near_barrier == barrier):
+                        final_obs[box[0]][box[1]] -= BOX_NEAR_BARRIER_PENALTY
+        
+        # Check if box to final is in straight line and add reward
+        # for box in self.boxes:
+        #     for goal in self.goals:
+        #         if box[0] == goal[0] or box[1] == goal[1]:
+        #             if box[0] == goal[0]:
+        #                 if box[1] < goal[1]:
+        #                     for i in range(box[1] + 1, goal[1]):
+        #                         if final_obs[box[0]][i] < 0:
+        #                             final_obs[box[0]][i] += 0.25
+        #                 else:
+        #                     for i in range(goal[1] + 1, box[1]):
+        #                         if final_obs[box[0]][i] < 0:
+        #                             final_obs[box[0]][i] += 0.25
+        #             else:
+        #                 if box[0] < goal[0]:
+        #                     for i in range(box[0] + 1, goal[0]):
+        #                         if final_obs[i][box[1]] < 0:
+        #                             final_obs[i][box[1]] += 0.25
+        #                 else:
+        #                     for i in range(goal[0] + 1, box[0]):
+        #                         if final_obs[i][box[1]] < 0:
+        #                             final_obs[i][box[1]] += 0.25
+        
+        # Encode player position 
+        final_obs[self.playerXY[0]][self.playerXY[1]] = -1
+        
+        return final_obs
 
     def construct_arena(self):
         arena = np.zeros((10, 10))
@@ -226,6 +272,7 @@ class SokobanEnv:
         direction = self.get_direction_from_action(action)
 
         previous_obs = self.obs.copy()
+        previous_box_positions = self.boxes.copy()
         success = self.move(direction)
 
         done = False
@@ -239,9 +286,13 @@ class SokobanEnv:
                 print('WIN')
                 done = True
             else:
+                if np.any(previous_box_positions != self.boxes):
+                    reward += BOX_PUSH_REWARD
                 self.obs = self.construct_obs()
-                reward = previous_obs[self.playerXY[0]][self.playerXY[1]]
-                return self.obs, reward, done, {}
+                reward += previous_obs[self.playerXY[0]][self.playerXY[1]]
+                done = False  # Set done to False since the game is not yet finished
+                info = {}  # Set info to an empty dictionary
+                return self.obs, reward, done, info  # Return the updated observation, reward, done, and info values
         else:
             reward = INVALID_MOVE_PENALTY
         
@@ -282,10 +333,10 @@ class DQN(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(DQN, self).__init__()
         self.input_dim = input_dim
-        self.fc1 = nn.Linear(input_dim, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.fc3 = nn.Linear(128, 128)
-        self.fc4 = nn.Linear(128, 128)
+        self.fc1 = nn.Linear(input_dim, 512)
+        self.fc2 = nn.Linear(512, 1024)
+        self.fc3 = nn.Linear(1024, 1024)
+        self.fc4 = nn.Linear(1024, 128)
         self.fc5 = nn.Linear(128, output_dim)  # Output dimension matches the number of actions
 
     def forward(self, x):
@@ -403,7 +454,7 @@ class DQNAgent:
             done = False
             total_reward = 0
             current_step = 0
-            verbose = 250
+            verbose = 1000
 
             while not done:
                 
@@ -462,10 +513,11 @@ class DQNAgent:
                 for i in range(10):
                     for j in range(10):
                         obs_val = obs[i][j]
-                        if obs_val < 0:
-                            color = (255, 255, 255)
+                        if obs_val < -1:
+                            color = (255, 0, 0)
                         else:
-                            color = (200*obs_val, 80*obs_val*1.2, 50*obs_val*1.5)
+                            color = (min(int(25*((obs_val+1.5)*(obs_val+1.5))), 255), min(int(5*((obs_val+1.25)*(obs_val+1.25))), 255), min(int(25*((obs_val+1.125)*(obs_val+1.125))), 255))
+
                         # draw text on screen with value of obs
                         font = pygame.font.Font(None, 12)
                         text = font.render(str(round(obs_val, 2)), True, (128, 128, 255))
@@ -493,6 +545,6 @@ barriers, player_x, player_y, box, goals = load_function_from_json('maps')
 env = SokobanEnv(playerXY=(player_x, player_y) , barriers=barriers , boxes=box , goals=goals)  # Instantiate environment
 env.reset()
 # print(env.obs)
-agent = DQNAgent(env, replay_capacity=1_000_000 , batch_size=1000, strategy='epsilon_greedy' , epsilon_start=0.05)  # Instantiate agent
-agent.train(num_episodes=1000 , reset_threshold=1000)  # Train the agent
+agent = DQNAgent(env, replay_capacity=1_000 , batch_size=128, strategy='epsilon_greedy' , epsilon_start=0.05)  # Instantiate agent
+agent.train(num_episodes=1000 , reset_threshold=2500)  # Train the agent
 agent.save_q_table('DQN')  # Save the NN weights to a file
