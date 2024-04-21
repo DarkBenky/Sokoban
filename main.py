@@ -369,8 +369,7 @@ class HistoryReplay():
             for path in win:
                 unique_id += path['obs_hash']
             new[hash(unique_id)] = win
-        self.history = list(new.values())
-        
+        self.history = list(new.values())   
         
     def clear_junk(self):
         for win in self.history:
