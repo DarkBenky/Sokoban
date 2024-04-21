@@ -27,7 +27,7 @@ PLAYER_CLOSE_TO_BOX_REWARD = 0.5
 TARGET_UPDATE = 10
 LEARNING_RATE = 0.01
 BOX_NEAR_BARRIER_PENALTY = 0.125
-PROBABILITY_OF_USING_HISTORY = 0.75
+PROBABILITY_OF_USING_HISTORY = 0.85
 
 from collections import namedtuple
 
@@ -356,6 +356,58 @@ class DQN(nn.Module):
         x = self.fc5(x)
         return x
 
+class HistoryReplay():
+    def __init__(self):
+        self.load()
+        self.remove_duplicate()
+        self.clear_junk()
+        
+    def remove_duplicate(self):
+        new = {}
+        for win in self.history:
+            unique_id = ''
+            for path in win:
+                unique_id += path['obs_hash']
+            new[hash(unique_id)] = win
+        self.history = list(new.values())
+        
+        
+    def clear_junk(self):
+        for win in self.history:
+            for index, path in enumerate(win):
+                for i in range(index+1, len(win)):
+                    if win[i]['obs_hash'] == path['obs_hash']:
+                        win = win[:i]
+                        break
+                else:
+                    continue
+                break
+                    
+    def push(self, obs , filename = 'history.pkl'):
+        self.history.append(obs)
+        pickle.dump(self.history, open(filename, 'wb'))
+    
+    def find(self, current_obs):
+        obs_hash = hashlib.sha256(current_obs).hexdigest()
+        solutions = []
+        for win in self.history:
+            for index , path in enumerate(win):
+                if path['obs_hash'] == obs_hash:
+                    length = len(win) - index
+                    solutions.append({'length': length, 'action': path['action']})
+        
+        # find shortest solution and return it
+        if solutions:
+            return min(solutions, key=lambda x: x['length'])['action']
+        else:
+            return None
+        
+    def load(self, filename='history.pkl'):
+        try:
+            self.history = pickle.load(open(filename, 'rb'))
+        except FileNotFoundError:
+            self.history = []
+        return self.history
 
 class DQNAgent:
     def __init__(self, env: SokobanEnv, replay_capacity=10000, batch_size=32, epsilon_start=1.0, epsilon_end=0.01, epsilon_decay=0.000_001 , strategy='linear'):
@@ -369,6 +421,7 @@ class DQNAgent:
         self.loss_fn = nn.MSELoss()
         
         self.win_history = self.load_win_history()
+        self.history_replay = HistoryReplay()
 
         self.discount_factor = 0.99
         self.epsilon = epsilon_start
@@ -481,6 +534,7 @@ class DQNAgent:
             current_step = 0
             verbose = 1000
             moves = {}
+            moves_v2 = []
 
             pause = False
             
@@ -521,20 +575,30 @@ class DQNAgent:
                     if self.find_win_moves(state) is not None:
                         # print("Winning move found")
                         action = self.find_win_moves(state)
+                        action_v2 = self.history_replay.find(state)
+                        if action_v2 is not None:
+                            action = action_v2
                         # time.sleep(1)
                         # print(action)
                 
                 next_state, reward, done, extra_data = self.env.step(action)
                 if extra_data['valid'] == True:
                     moves[hashlib.sha256(state).hexdigest()]={'action':action}
+                    moves_v2.append({'obs_hash': hashlib.sha256(state).hexdigest(), 'action': action })
+                
                 if done:
                     self.add_to_win_history(moves)
                     self.target_net.load_state_dict(self.policy_net.state_dict())
+                    self.history_replay.push(moves_v2)
+                    moves_v2 = []
+                    moves = {}
+                    break
+            
+            
                 self.replay_memory.push(Transition(state, action, reward, next_state, done))
                 self.learn()
                 total_reward += reward
                 state = next_state
-                current_step += 1
 
                 if env.step_count - env.last_box_move > reset_threshold:
                     env.step_count = 0
@@ -592,6 +656,7 @@ class DQNAgent:
                         pygame.draw.rect(screen, color, (block_size * i + 10 * block_size, block_size * j, block_size, block_size))
                         
                 pygame.display.flip()
+                current_step += 1
                 
             # Print episode information
             print(f'Epsilon :{self.epsilon}')
@@ -613,5 +678,5 @@ env = SokobanEnv(playerXY=(player_x, player_y) , barriers=barriers , boxes=box ,
 env.reset()
 # print(env.obs)
 agent = DQNAgent(env, replay_capacity=1_000_000 , batch_size=256, strategy='epsilon_greedy' , epsilon_start=0.05)  # Instantiate agent
-agent.train(num_episodes=10_000 , reset_threshold=750)  # Train the agent
+agent.train(num_episodes=10_000 , reset_threshold=200)  # Train the agent
 agent.save_q_network('DQN')  # Save the NN weights to a file
