@@ -3,6 +3,9 @@ import os
 import numpy as np
 import json
 import sys
+import pickle
+import hashlib
+import time
 # import time
 # from PIL import Image, ImageDraw
 import torch
@@ -22,8 +25,9 @@ BOX_PUSH_REWARD = 1.5
 BOX_CLOSE_TO_GOAL_REWARD = 2.5
 PLAYER_CLOSE_TO_BOX_REWARD = 0.5
 TARGET_UPDATE = 10
-LEARNING_RATE = 0.05
+LEARNING_RATE = 0.01
 BOX_NEAR_BARRIER_PENALTY = 0.125
+PROBABILITY_OF_USING_HISTORY = 0.75
 
 from collections import namedtuple
 
@@ -285,18 +289,20 @@ class SokobanEnv:
                 reward = WIN_REWARD
                 print('WIN')
                 done = True
+                info = {'valid':True}
             else:
                 if np.any(previous_box_positions != self.boxes):
                     reward += BOX_PUSH_REWARD
                 self.obs = self.construct_obs()
                 reward += previous_obs[self.playerXY[0]][self.playerXY[1]]
                 done = False  # Set done to False since the game is not yet finished
-                info = {}  # Set info to an empty dictionary
+                info = {'valid':True}  # Set info to an empty dictionary
                 return self.obs, reward, done, info  # Return the updated observation, reward, done, and info values
         else:
             reward = INVALID_MOVE_PENALTY
+            info = {'valid':False}
         
-        return self.obs, reward, done, {}
+        return self.obs, reward, done, info
     
     def reset(self):
         barriers, player_x, player_y, box, goals = load_function_from_json('maps')
@@ -361,6 +367,8 @@ class DQNAgent:
         self.target_net.eval()
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=LEARNING_RATE)
         self.loss_fn = nn.MSELoss()
+        
+        self.win_history = self.load_win_history()
 
         self.discount_factor = 0.99
         self.epsilon = epsilon_start
@@ -438,6 +446,24 @@ class DQNAgent:
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
+        
+    def add_to_win_history(self, obs_history):
+        self.win_history.append(obs_history)
+        pickle.dump(self.win_history, open('win_history.pkl', 'wb'))
+        
+    def load_win_history(self):
+        try:
+            self.win_history = pickle.load(open('win_history.pkl', 'rb'))
+        except FileNotFoundError:
+            self.win_history = []
+        return self.win_history
+    
+    def find_win_moves(self, current_obs):
+        obs_hash = hashlib.sha256(current_obs).hexdigest()
+        solutions = [{'length': len(win), 'action': win[obs_hash]['action']} for win in self.win_history if obs_hash in win]
+        if solutions:
+            return min(solutions, key=lambda x: x['length'])['action']
+        return None
 
     def train(self, num_episodes, reset_threshold=250_000):
         best_average_reward = -float('inf')
@@ -447,7 +473,6 @@ class DQNAgent:
         screen_width, screen_height = 800, 800
         screen = pygame.display.set_mode((screen_width, screen_height))
 
-
         for episode in range(num_episodes):
             self.env.reset()
             state = self.env.obs
@@ -455,15 +480,56 @@ class DQNAgent:
             total_reward = 0
             current_step = 0
             verbose = 1000
+            moves = {}
 
+            pause = False
+            
             while not done:
                 
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         sys.exit()
+                    if event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_p:
+                            pause = not pause
+                            print("Paused")
+                        if event.key == pygame.K_r:
+                            break
                 
-                action = self.choose_action(state)
-                next_state, reward, done, _ = self.env.step(action)
+                if pause == False:
+                    action = self.choose_action(state)
+                else:
+                    pygame.event.clear()  # Clear any previous events to avoid queuing up events
+                    event = pygame.event.wait()
+                    if event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_p:
+                            pause = not pause
+                            print("Paused")
+                        if event.key == pygame.K_r:
+                            break
+                        if event.key == pygame.K_LEFT:
+                            action = 0
+                        elif event.key == pygame.K_RIGHT:
+                            action = 1
+                        elif event.key == pygame.K_UP:
+                            action = 2
+                        elif event.key == pygame.K_DOWN:
+                            action = 3
+                        else:
+                            action = 0
+                if random.random() < PROBABILITY_OF_USING_HISTORY:
+                    if self.find_win_moves(state) is not None:
+                        # print("Winning move found")
+                        action = self.find_win_moves(state)
+                        # time.sleep(1)
+                        # print(action)
+                
+                next_state, reward, done, extra_data = self.env.step(action)
+                if extra_data['valid'] == True:
+                    moves[hashlib.sha256(state).hexdigest()]={'action':action}
+                if done:
+                    self.add_to_win_history(moves)
+                    self.target_net.load_state_dict(self.policy_net.state_dict())
                 self.replay_memory.push(Transition(state, action, reward, next_state, done))
                 self.learn()
                 total_reward += reward
@@ -483,7 +549,8 @@ class DQNAgent:
                     print(f"Current step: {current_step}, Total reward: {total_reward}, Average reward: {total_reward / current_step}")
                     print(f"Epsilon : {self.epsilon}")
                     self.target_net.load_state_dict(self.policy_net.state_dict())
-
+                
+                 
                 """ arena is 10*10 grid
                 player == 4
                 box == 3 
@@ -545,6 +612,6 @@ barriers, player_x, player_y, box, goals = load_function_from_json('maps')
 env = SokobanEnv(playerXY=(player_x, player_y) , barriers=barriers , boxes=box , goals=goals)  # Instantiate environment
 env.reset()
 # print(env.obs)
-agent = DQNAgent(env, replay_capacity=1_000 , batch_size=128, strategy='epsilon_greedy' , epsilon_start=0.05)  # Instantiate agent
-agent.train(num_episodes=1000 , reset_threshold=2500)  # Train the agent
-agent.save_q_table('DQN')  # Save the NN weights to a file
+agent = DQNAgent(env, replay_capacity=1_000_000 , batch_size=256, strategy='epsilon_greedy' , epsilon_start=0.05)  # Instantiate agent
+agent.train(num_episodes=10_000 , reset_threshold=750)  # Train the agent
+agent.save_q_network('DQN')  # Save the NN weights to a file
