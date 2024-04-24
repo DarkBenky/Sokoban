@@ -13,7 +13,8 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import math
-import pprint
+# import pprint
+from stable_baselines3 import DQN
 import pygame
 # from numba import jit
 
@@ -334,26 +335,45 @@ class ReplayMemory:
 
     def __len__(self):
         return len(self.memory)
+    
 
 class DQN(nn.Module):
-    def __init__(self, input_dim, output_dim):
+    def __init__(self, input_dim, output_dim, single_mode=1, batch_size=256):
         super(DQN, self).__init__()
+        self.single_mode = single_mode
+        self.batch_size = batch_size
         self.input_dim = input_dim
-        self.fc1 = nn.Linear(input_dim, 512)
-        self.fc2 = nn.Linear(512, 512)
-        self.fc3 = nn.Linear(512, 256)
-        self.fc4 = nn.Linear(256, 128)
-        self.fc5 = nn.Linear(128, output_dim)  # Output dimension matches the number of actions
+        self.conv1 = nn.Conv2d(input_dim[0], 32, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
+        self.conv_out_size = self._get_conv_output_dim(self.input_dim)
+        self.fc1 = nn.Linear(self.conv_out_size, 512)
+        self.fc2 = nn.Linear(512, output_dim)
 
     def forward(self, x):
-        # Flatten the input tensor to be compatible with fully connected layers
-        x = x.view(x.size(0), -1)
-        # print(x.shape)
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
-        x = torch.relu(self.fc3(x))
-        x = torch.relu(self.fc4(x))
-        x = self.fc5(x)
+        x = F.relu(self.conv1(x))
+        x = F.max_pool2d(x, 2)  # Max pooling with 2x2 kernel, reduces input size by half
+        x = F.relu(self.conv2(x))
+        x = F.max_pool2d(x, 2)
+        x = F.relu(self.conv3(x))
+        
+        x = x.view(-1, self.conv_out_size)  # Keep batch size for batch mode
+        
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
+    def _get_conv_output_dim(self, shape):
+        dummy_input = torch.zeros(1, *shape)
+        dummy_output = self._forward_conv(dummy_input)
+        return int(torch.prod(torch.tensor(dummy_output.shape)))
+
+    def _forward_conv(self, x):
+        x = F.relu(self.conv1(x))
+        x = F.max_pool2d(x, 2)
+        x = F.relu(self.conv2(x))
+        x = F.max_pool2d(x, 2)
+        x = F.relu(self.conv3(x))
         return x
 
 class Classifier(nn.Module):
@@ -372,13 +392,14 @@ class Classifier(nn.Module):
         x = self.fc3(x)
         x = F.softmax(x, dim=1)  # Apply softmax activation along dimension 1 (the features dimension)
         return x
+    
 
 class DQNAgent:
     def __init__(self, env: SokobanEnv, replay_capacity=10000, batch_size=32, epsilon_start=1.0, epsilon_end=0.01, epsilon_decay=0.000_001 , strategy='linear'):
         self.env = env
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.policy_net = DQN(np.prod(env.obs.shape), len(env.action_space)).to(self.device)
-        self.target_net = DQN(np.prod(env.obs.shape), len(env.action_space)).to(self.device)
+        self.policy_net = DQN((1,10,10), len(env.action_space)).to(self.device)
+        self.target_net = DQN((1,10,10), len(env.action_space)).to(self.device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=LEARNING_RATE)
@@ -387,8 +408,9 @@ class DQNAgent:
         self.win_history = self.load_win_history()
         self.remove_duplicates()
         
-        self.classifier = Classifier().to(self.device)
-        self.train_classifier()
+        # self.classifier = Classifier().to(self.device)
+        # self.load_classifier('classifier')
+        # self.train_classifier()
 
         self.discount_factor = 0.99
         self.epsilon = epsilon_start
@@ -446,6 +468,9 @@ class DQNAgent:
         # save model 
         torch.save(self.classifier.state_dict(), 'classifier')
         
+    def load_classifier(self, path):
+        self.classifier.load_state_dict(torch.load(path))
+        
     def choose_action(self, state):
         self.step_number += 1
         
@@ -459,26 +484,13 @@ class DQNAgent:
             self.epsilon = max(self.epsilon_end, self.epsilon_start - self.epsilon_decay * self.step_number)
             if np.random.rand() < self.epsilon:
                 return np.random.choice(self.env.action_space)
-        elif self.strategy == 'boltzmann':
-            if self.epsilon_decay < 0:
-                raise ValueError("Temperature (epsilon_decay) must be positive for Boltzmann exploration")
-            q_values = self.policy_net(torch.tensor(state, dtype=torch.float32).to(self.device))
-            boltzmann_probs = F.softmax(q_values / self.epsilon_decay, dim=-1)
-            action = torch.multinomial(boltzmann_probs, 1)
-            return action.item()
-        elif self.strategy == 'softmax':
-            if self.epsilon_decay < 0:
-                raise ValueError("Temperature (epsilon_decay) must be positive for Softmax exploration")
-            q_values = self.policy_net(torch.tensor(state, dtype=torch.float32).to(self.device))
-            softmax_probs = F.softmax(q_values / self.epsilon_decay, dim=-1)
-            action = torch.multinomial(softmax_probs, 1)
-            return action.item()
         else:
             raise ValueError('Invalid strategy')
         
         with torch.no_grad():
             state_tensor = torch.tensor(state, dtype=torch.float32).to(self.device)
             state_tensor = state_tensor.unsqueeze(0)  # Add batch dimension
+            # print(f"{state_tensor.shape=}")
             q_values = self.policy_net(state_tensor)
             if np.random.rand() < self.epsilon:
                 return np.random.choice(self.env.action_space)
@@ -497,19 +509,23 @@ class DQNAgent:
         reward_batch = torch.tensor(batch.reward, dtype=torch.float32).to(self.device)
         next_state_batch = torch.tensor(np.array(batch.next_state), dtype=torch.float32).to(self.device)
         done_batch = torch.tensor(batch.done, dtype=torch.float32).to(self.device)
+        
+        # Iterate over the batch of states
+        for i in range(len(state_batch)):
+            # Predict Q-values for the current state
+            q_values = self.policy_net(state_batch[i].unsqueeze(0))
+            q_values = q_values.gather(1, action_batch[i].unsqueeze(0).unsqueeze(0))  # Select the Q-value corresponding to the action
+            
+            # Compute expected Q-values for the next state
+            with torch.no_grad():
+                next_q_values = self.target_net(next_state_batch[i].unsqueeze(0)).max(1)[0].unsqueeze(0)
+                expected_q_values = reward_batch[i] + self.discount_factor * next_q_values * (1 - done_batch[i])
 
-        q_values = self.policy_net(state_batch)
-        q_values = q_values.gather(1, action_batch.unsqueeze(1))
-
-        with torch.no_grad():
-            next_q_values = self.target_net(next_state_batch).max(1)[0].unsqueeze(1)
-            expected_q_values = reward_batch + self.discount_factor * next_q_values * (1 - done_batch)
-
-        loss = self.loss_fn(q_values, expected_q_values)
-
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
+            # Calculate the loss and perform backpropagation
+            loss = self.loss_fn(q_values, expected_q_values)
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
         
     def add_to_win_history(self, obs_history):
         self.win_history.append(obs_history)
@@ -549,8 +565,6 @@ class DQNAgent:
             current_step = 0
             verbose = 1000
             moves = {}
-            moves_v2 = []
-
             pause = False
             
             while not done:
@@ -565,9 +579,19 @@ class DQNAgent:
                         if event.key == pygame.K_r:
                             break
                 
-                if pause == False:
-                    action = self.choose_action(state)
+                       
+                            
+                if random.random() < PROBABILITY_OF_USING_HISTORY:
+                    action_v1 = self.find_win_moves(state)
+                    if action_v1 is not None:
+                        action = action_v1
+                    else:
+                        action = self.choose_action(state)
                 else:
+                    action = self.choose_action(state) 
+                        
+                
+                if pause:
                     pygame.event.clear()  # Clear any previous events to avoid queuing up events
                     event = pygame.event.wait()
                     if event.type == pygame.KEYDOWN:
@@ -585,17 +609,7 @@ class DQNAgent:
                         elif event.key == pygame.K_DOWN:
                             action = 3
                         else:
-                            action = 0
-                if random.random() < PROBABILITY_OF_USING_HISTORY:
-                    # action_v2 = self.history_replay.find(state)
-                    # if action_v2 is not None:
-                    #     action = action
-                    #     print('using V2')
-                    # else:
-                    # print('using V1')
-                    action_v1 = self.find_win_moves(state)
-                    if action_v1 is not None:
-                        action = action_v1
+                            action = 0       
             
                 next_state, reward, done, extra_data = self.env.step(action)
                 if extra_data['valid'] == True:
@@ -688,6 +702,7 @@ barriers, player_x, player_y, box, goals = load_function_from_json('maps')
 env = SokobanEnv(playerXY=(player_x, player_y) , barriers=barriers , boxes=box , goals=goals)  # Instantiate environment
 env.reset()
 # print(env.obs)
-agent = DQNAgent(env, replay_capacity=1_000_000 , batch_size=256, strategy='epsilon_greedy' , epsilon_start=0.05)  # Instantiate agent
-agent.train(num_episodes=2_500 , reset_threshold=200)  # Train the agent
+agent = DQNAgent(env, replay_capacity=10_000 , batch_size=32, strategy='epsilon_greedy' , epsilon_start=0.05)  # Instantiate agent
+# agent.load_q_network('DQN')  # Load the NN weights from a file
+agent.train(num_episodes=500 , reset_threshold=200)  # Train the agent
 agent.save_q_network('DQN')  # Save the NN weights to a file
