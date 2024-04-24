@@ -27,7 +27,7 @@ PLAYER_CLOSE_TO_BOX_REWARD = 0.5
 TARGET_UPDATE = 10
 LEARNING_RATE = 0.01
 BOX_NEAR_BARRIER_PENALTY = 0.125
-PROBABILITY_OF_USING_HISTORY = 0.85
+PROBABILITY_OF_USING_HISTORY = 0.95
 
 from collections import namedtuple
 
@@ -340,9 +340,9 @@ class DQN(nn.Module):
         super(DQN, self).__init__()
         self.input_dim = input_dim
         self.fc1 = nn.Linear(input_dim, 512)
-        self.fc2 = nn.Linear(512, 1024)
-        self.fc3 = nn.Linear(1024, 1024)
-        self.fc4 = nn.Linear(1024, 128)
+        self.fc2 = nn.Linear(512, 512)
+        self.fc3 = nn.Linear(512, 256)
+        self.fc4 = nn.Linear(256, 128)
         self.fc5 = nn.Linear(128, output_dim)  # Output dimension matches the number of actions
 
     def forward(self, x):
@@ -356,57 +356,22 @@ class DQN(nn.Module):
         x = self.fc5(x)
         return x
 
-class HistoryReplay():
+class Classifier(nn.Module):
     def __init__(self):
-        self.load()
-        self.remove_duplicate()
-        self.clear_junk()
-        
-    def remove_duplicate(self):
-        new = {}
-        for win in self.history:
-            unique_id = ''
-            for path in win:
-                unique_id += path['obs_hash']
-            new[hash(unique_id)] = win
-        self.history = list(new.values())   
-        
-    def clear_junk(self):
-        for win in self.history:
-            for index, path in enumerate(win):
-                for i in range(index+1, len(win)):
-                    if win[i]['obs_hash'] == path['obs_hash']:
-                        win = win[:i]
-                        break
-                else:
-                    continue
-                break
-                    
-    def push(self, obs , filename = 'history.pkl'):
-        self.history.append(obs)
-        pickle.dump(self.history, open(filename, 'wb'))
-    
-    def find(self, current_obs):
-        obs_hash = hashlib.sha256(current_obs).hexdigest()
-        solutions = []
-        for win in self.history:
-            for index , path in enumerate(win):
-                if path['obs_hash'] == obs_hash:
-                    length = len(win) - index
-                    solutions.append({'length': length, 'action': path['action']})
-        
-        # find shortest solution and return it
-        if solutions:
-            return min(solutions, key=lambda x: x['length'])['action']
-        else:
-            return None
-        
-    def load(self, filename='history.pkl'):
-        try:
-            self.history = pickle.load(open(filename, 'rb'))
-        except FileNotFoundError:
-            self.history = []
-        return self.history
+        super(Classifier, self).__init__()
+        self.fc1 = nn.Linear(10 * 10, 512)  # Input size: 10x10, Output size: 64
+        self.fc2 = nn.Linear(512, 256)        # Input size: 64, Output size: 32
+        self.fc3 = nn.Linear(256, 4)         # Input size: 32, Output size: 4
+        self.relu = nn.ReLU()
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x):
+        x = x.view(-1, 10 * 10)  # Flatten the input to a vector
+        x = self.relu(self.fc1(x))
+        x = self.relu(self.fc2(x))
+        x = self.fc3(x)
+        x = F.softmax(x, dim=1)  # Apply softmax activation along dimension 1 (the features dimension)
+        return x
 
 class DQNAgent:
     def __init__(self, env: SokobanEnv, replay_capacity=10000, batch_size=32, epsilon_start=1.0, epsilon_end=0.01, epsilon_decay=0.000_001 , strategy='linear'):
@@ -420,7 +385,10 @@ class DQNAgent:
         self.loss_fn = nn.MSELoss()
         
         self.win_history = self.load_win_history()
-        self.history_replay = HistoryReplay()
+        self.remove_duplicates()
+        
+        self.classifier = Classifier().to(self.device)
+        self.train_classifier()
 
         self.discount_factor = 0.99
         self.epsilon = epsilon_start
@@ -433,7 +401,51 @@ class DQNAgent:
 
         self.replay_memory = ReplayMemory(replay_capacity)
         self.batch_size = batch_size
+    
+    def remove_duplicates(self):
+        win_unique = {}
+        for win in self.win_history:
+            attributes = [str(hash(str(key) + str(len(win[key])))) for key in win]
+            uniq_id = hash(''.join(attributes))
+            win_unique[uniq_id] = win
+        self.win_history = list(win_unique.values())
+        with open('win_history.pkl', 'wb') as f:
+            pickle.dump(self.win_history, f)
 
+    def train_classifier(self, episodes=3):
+        optimizer = torch.optim.Adam(self.classifier.parameters(), lr=0.01)
+        
+        training_data = []
+        training_labels = []
+        
+        for win in self.win_history:
+            for obs_hash, data in win.items():
+                # Check if data has key 'obs'
+                if 'obs' in data:
+                    obs = data['obs']
+                    a = data['action']
+                    action = np.zeros(4)
+                    action[a] = 1
+                    obs_tensor = torch.tensor(obs, dtype=torch.float32).to(self.device)
+                    action_tensor = torch.tensor(action, dtype=torch.float32).to(self.device)
+                    
+                    training_data.append(obs_tensor)
+                    training_labels.append(action_tensor)
+                    
+        for episode in range(episodes):
+            total_loss = 0
+            for i in range(len(training_data)):
+                optimizer.zero_grad()
+                output = self.classifier(training_data[i])
+                loss = F.binary_cross_entropy_with_logits(output, action_tensor.unsqueeze(0))
+                loss.backward()
+                total_loss += loss.item()
+                optimizer.step()
+            print(f'Episode: {episode}, Loss: {total_loss / len(training_data)}\r ')
+        
+        # save model 
+        torch.save(self.classifier.state_dict(), 'classifier')
+        
     def choose_action(self, state):
         self.step_number += 1
         
@@ -501,11 +513,15 @@ class DQNAgent:
         
     def add_to_win_history(self, obs_history):
         self.win_history.append(obs_history)
-        pickle.dump(self.win_history, open('win_history.pkl', 'wb'))
+        # pickle.dump(self.win_history, open('win_history.pkl', 'wb'))
+        with open('win_history.pkl', 'wb') as f:
+            pickle.dump(self.win_history, f)
         
     def load_win_history(self):
         try:
-            self.win_history = pickle.load(open('win_history.pkl', 'rb'))
+            with open('win_history.pkl', 'rb') as f:
+                self.win_history = pickle.load(f)
+            # self.win_history = pickle.load(open('win_history.pkl', 'rb'))
         except FileNotFoundError:
             self.win_history = []
         return self.win_history
@@ -522,7 +538,7 @@ class DQNAgent:
         best_episode = 0
         
         pygame.init()
-        screen_width, screen_height = 800, 800
+        screen_width, screen_height = 800, 400
         screen = pygame.display.set_mode((screen_width, screen_height))
 
         for episode in range(num_episodes):
@@ -571,28 +587,24 @@ class DQNAgent:
                         else:
                             action = 0
                 if random.random() < PROBABILITY_OF_USING_HISTORY:
-                    if self.find_win_moves(state) is not None:
-                        # print("Winning move found")
-                        action = self.find_win_moves(state)
-                        action_v2 = self.history_replay.find(state)
-                        if action_v2 is not None:
-                            action = action_v2
-                        # time.sleep(1)
-                        # print(action)
-                
+                    # action_v2 = self.history_replay.find(state)
+                    # if action_v2 is not None:
+                    #     action = action
+                    #     print('using V2')
+                    # else:
+                    # print('using V1')
+                    action_v1 = self.find_win_moves(state)
+                    if action_v1 is not None:
+                        action = action_v1
+            
                 next_state, reward, done, extra_data = self.env.step(action)
                 if extra_data['valid'] == True:
-                    moves[hashlib.sha256(state).hexdigest()]={'action':action}
-                    moves_v2.append({'obs_hash': hashlib.sha256(state).hexdigest(), 'action': action })
+                    moves[hashlib.sha256(state).hexdigest()]={'action':action, 'obs' : state}
                 
                 if done:
                     self.add_to_win_history(moves)
                     self.target_net.load_state_dict(self.policy_net.state_dict())
-                    self.history_replay.push(moves_v2)
-                    moves_v2 = []
                     moves = {}
-                    break
-            
             
                 self.replay_memory.push(Transition(state, action, reward, next_state, done))
                 self.learn()
@@ -677,5 +689,5 @@ env = SokobanEnv(playerXY=(player_x, player_y) , barriers=barriers , boxes=box ,
 env.reset()
 # print(env.obs)
 agent = DQNAgent(env, replay_capacity=1_000_000 , batch_size=256, strategy='epsilon_greedy' , epsilon_start=0.05)  # Instantiate agent
-agent.train(num_episodes=10_000 , reset_threshold=200)  # Train the agent
+agent.train(num_episodes=2_500 , reset_threshold=200)  # Train the agent
 agent.save_q_network('DQN')  # Save the NN weights to a file
