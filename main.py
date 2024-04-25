@@ -6,8 +6,6 @@ import sys
 import pickle
 import hashlib
 import time
-# import time
-# from PIL import Image, ImageDraw
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -19,16 +17,12 @@ import pygame
 # from numba import jit
 
 INVALID_MOVE_PENALTY = -2
-PREFORMED_MOVE_PENALTY = -0.5
-STACKED_BOX = -10
 WIN_REWARD = 100
 BOX_PUSH_REWARD = 1.5
 BOX_CLOSE_TO_GOAL_REWARD = 2.5
-PLAYER_CLOSE_TO_BOX_REWARD = 0.5
-TARGET_UPDATE = 10
 LEARNING_RATE = 0.01
 BOX_NEAR_BARRIER_PENALTY = 0.125
-PROBABILITY_OF_USING_HISTORY = 0.95
+PROBABILITY_OF_USING_HISTORY = 0.65
 
 from collections import namedtuple
 
@@ -338,14 +332,16 @@ class ReplayMemory:
     
 
 class DQN(nn.Module):
-    def __init__(self, input_dim, output_dim, single_mode=1, batch_size=256):
+    def __init__(self, input_dim, output_dim):
         super(DQN, self).__init__()
-        self.single_mode = single_mode
-        self.batch_size = batch_size
+        self.output_dim = output_dim
         self.input_dim = input_dim
-        self.conv1 = nn.Conv2d(input_dim[0], 32, kernel_size=3, stride=1, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
+        
+        self.conv1 = nn.Conv2d(input_dim[0], 128, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1)
+        self.conv3 = nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1)
+        self.conv4 = nn.Conv2d(512, 64, kernel_size=3, stride=1, padding=1)
+        
         self.conv_out_size = self._get_conv_output_dim(self.input_dim)
         self.fc1 = nn.Linear(self.conv_out_size, 512)
         self.fc2 = nn.Linear(512, output_dim)
@@ -356,11 +352,16 @@ class DQN(nn.Module):
         x = F.relu(self.conv2(x))
         x = F.max_pool2d(x, 2)
         x = F.relu(self.conv3(x))
+        x = F.max_pool2d(x, 2)
+        x = F.relu(self.conv4(x))
         
         x = x.view(-1, self.conv_out_size)  # Keep batch size for batch mode
         
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
+        x = x.view(4,int(self.output_dim/4))
+        # get the max of each row
+        x = torch.max(x, 0)[0]
         return x
 
     def _get_conv_output_dim(self, shape):
@@ -374,36 +375,21 @@ class DQN(nn.Module):
         x = F.relu(self.conv2(x))
         x = F.max_pool2d(x, 2)
         x = F.relu(self.conv3(x))
-        return x
-
-class Classifier(nn.Module):
-    def __init__(self):
-        super(Classifier, self).__init__()
-        self.fc1 = nn.Linear(10 * 10, 512)  # Input size: 10x10, Output size: 64
-        self.fc2 = nn.Linear(512, 256)        # Input size: 64, Output size: 32
-        self.fc3 = nn.Linear(256, 4)         # Input size: 32, Output size: 4
-        self.relu = nn.ReLU()
-        self.softmax = nn.Softmax(dim=1)
-
-    def forward(self, x):
-        x = x.view(-1, 10 * 10)  # Flatten the input to a vector
-        x = self.relu(self.fc1(x))
-        x = self.relu(self.fc2(x))
-        x = self.fc3(x)
-        x = F.softmax(x, dim=1)  # Apply softmax activation along dimension 1 (the features dimension)
-        return x
-    
+        x = F.max_pool2d(x, 2)
+        x = F.relu(self.conv4(x))
+        return x    
 
 class DQNAgent:
     def __init__(self, env: SokobanEnv, replay_capacity=10000, batch_size=32, epsilon_start=1.0, epsilon_end=0.01, epsilon_decay=0.000_001 , strategy='linear'):
         self.env = env
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.policy_net = DQN((1,10,10), len(env.action_space)).to(self.device)
-        self.target_net = DQN((1,10,10), len(env.action_space)).to(self.device)
+        self.policy_net = DQN((batch_size,10,10), len(env.action_space)*batch_size).to(self.device)
+        self.target_net = DQN((batch_size,10,10), len(env.action_space)*batch_size).to(self.device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=LEARNING_RATE)
         self.loss_fn = nn.MSELoss()
+        self.loss_history = []
         
         self.win_history = self.load_win_history()
         self.remove_duplicates()
@@ -433,43 +419,6 @@ class DQNAgent:
         self.win_history = list(win_unique.values())
         with open('win_history.pkl', 'wb') as f:
             pickle.dump(self.win_history, f)
-
-    def train_classifier(self, episodes=3):
-        optimizer = torch.optim.Adam(self.classifier.parameters(), lr=0.01)
-        
-        training_data = []
-        training_labels = []
-        
-        for win in self.win_history:
-            for obs_hash, data in win.items():
-                # Check if data has key 'obs'
-                if 'obs' in data:
-                    obs = data['obs']
-                    a = data['action']
-                    action = np.zeros(4)
-                    action[a] = 1
-                    obs_tensor = torch.tensor(obs, dtype=torch.float32).to(self.device)
-                    action_tensor = torch.tensor(action, dtype=torch.float32).to(self.device)
-                    
-                    training_data.append(obs_tensor)
-                    training_labels.append(action_tensor)
-                    
-        for episode in range(episodes):
-            total_loss = 0
-            for i in range(len(training_data)):
-                optimizer.zero_grad()
-                output = self.classifier(training_data[i])
-                loss = F.binary_cross_entropy_with_logits(output, action_tensor.unsqueeze(0))
-                loss.backward()
-                total_loss += loss.item()
-                optimizer.step()
-            print(f'Episode: {episode}, Loss: {total_loss / len(training_data)}\r ')
-        
-        # save model 
-        torch.save(self.classifier.state_dict(), 'classifier')
-        
-    def load_classifier(self, path):
-        self.classifier.load_state_dict(torch.load(path))
         
     def choose_action(self, state):
         self.step_number += 1
@@ -488,14 +437,18 @@ class DQNAgent:
             raise ValueError('Invalid strategy')
         
         with torch.no_grad():
-            state_tensor = torch.tensor(state, dtype=torch.float32).to(self.device)
-            state_tensor = state_tensor.unsqueeze(0)  # Add batch dimension
-            # print(f"{state_tensor.shape=}")
-            q_values = self.policy_net(state_tensor)
             if np.random.rand() < self.epsilon:
                 return np.random.choice(self.env.action_space)
             else:
-                return q_values.argmax().item()  # Return the action with the highest Q-value
+                state_tensor = torch.tensor(state, dtype=torch.float32).to(self.device)
+                state_tensor = state_tensor.unsqueeze(0)  # Add batch dimension
+                state_tensor = state_tensor.repeat(self.batch_size, 1 , 1)
+                q_values = self.policy_net(state_tensor)
+                # print(q_values)
+                action = q_values.argmax().item()
+                # print("max item size:", q_values[action])
+                action = action % len(self.env.action_space)
+                return action
 
     def learn(self):
         if len(self.replay_memory) < self.batch_size:
@@ -510,22 +463,34 @@ class DQNAgent:
         next_state_batch = torch.tensor(np.array(batch.next_state), dtype=torch.float32).to(self.device)
         done_batch = torch.tensor(batch.done, dtype=torch.float32).to(self.device)
         
-        # Iterate over the batch of states
-        for i in range(len(state_batch)):
-            # Predict Q-values for the current state
-            q_values = self.policy_net(state_batch[i].unsqueeze(0))
-            q_values = q_values.gather(1, action_batch[i].unsqueeze(0).unsqueeze(0))  # Select the Q-value corresponding to the action
-            
-            # Compute expected Q-values for the next state
-            with torch.no_grad():
-                next_q_values = self.target_net(next_state_batch[i].unsqueeze(0)).max(1)[0].unsqueeze(0)
-                expected_q_values = reward_batch[i] + self.discount_factor * next_q_values * (1 - done_batch[i])
+        
+        # Predict Q-values for the current state
+        q_values = self.policy_net(state_batch)
+        q_values = q_values.unsqueeze(0)
+        # print(f'{q_values.shape=}')
+        # print(f'{action_batch.shape=}')
 
-            # Calculate the loss and perform backpropagation
-            loss = self.loss_fn(q_values, expected_q_values)
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+        # Select the Q-value corresponding to the action
+        q_values = q_values.gather(1, action_batch.unsqueeze(0))
+
+        # Compute expected Q-values for the next state
+        with torch.no_grad():
+            next_q_values = self.target_net(next_state_batch)
+            next_q_values = next_q_values.unsqueeze(0)
+            expected_q_values = reward_batch + self.discount_factor * next_q_values * (1 - done_batch)
+
+        # Calculate the loss and perform backpropagation
+        loss = self.loss_fn(q_values, expected_q_values)
+        self.loss_history.append(loss.item())
+        if len(self.loss_history) > 1000:
+            # remove first 5000 logs
+            print('#'*25)
+            print(f'Current loss :{sum(self.loss_history)/len(self.loss_history)}')
+            print('#'*25)
+            self.loss_history = self.loss_history[500:] 
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
         
     def add_to_win_history(self, obs_history):
         self.win_history.append(obs_history)
@@ -582,7 +547,9 @@ class DQNAgent:
                        
                             
                 if random.random() < PROBABILITY_OF_USING_HISTORY:
+                    # start = time.time()
                     action_v1 = self.find_win_moves(state)
+                    # print(f"Time taken to find win moves: {time.time() - start}")
                     if action_v1 is not None:
                         action = action_v1
                     else:
@@ -686,7 +653,10 @@ class DQNAgent:
             # Print episode information
             print(f'Epsilon :{self.epsilon}')
             print(f"Episode {episode+1}/{num_episodes}, Total Reward: {total_reward}, Average Reward: {total_reward / current_step}")
-
+            if total_reward / current_step > best_average_reward:
+                best_average_reward = total_reward / current_step
+                best_episode = episode + 1
+            
         print(f"Best average reward achieved: {best_average_reward} at episode {best_episode}")
 
     def save_q_network(self, path):
@@ -702,7 +672,7 @@ barriers, player_x, player_y, box, goals = load_function_from_json('maps')
 env = SokobanEnv(playerXY=(player_x, player_y) , barriers=barriers , boxes=box , goals=goals)  # Instantiate environment
 env.reset()
 # print(env.obs)
-agent = DQNAgent(env, replay_capacity=10_000 , batch_size=32, strategy='epsilon_greedy' , epsilon_start=0.05)  # Instantiate agent
+agent = DQNAgent(env, replay_capacity=10_000 , batch_size=1024, strategy='epsilon_greedy' , epsilon_start=0.025)  # Instantiate agent
 # agent.load_q_network('DQN')  # Load the NN weights from a file
-agent.train(num_episodes=500 , reset_threshold=200)  # Train the agent
+agent.train(num_episodes=500 , reset_threshold=250)  # Train the agent
 agent.save_q_network('DQN')  # Save the NN weights to a file
