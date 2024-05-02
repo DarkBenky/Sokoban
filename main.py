@@ -350,7 +350,7 @@ class PPOModel(nn.Module):
         
         # Value network
         self.fc_value = nn.Linear(self.conv_out_size, 512)
-        self.fc_value_out = nn.Linear(512, 1)
+        self.fc_value_out = nn.Linear(512, output_dim//4)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
@@ -406,9 +406,11 @@ class PPOAgent:
             state_tensor = torch.tensor(state, dtype=torch.float32).to(self.device)
             state_tensor = state_tensor.unsqueeze(0)  # Add batch dimension
             state_tensor = state_tensor.repeat(self.batch, 1, 1)
-            action_probs, _ = self.model(state_tensor)
-            action = torch.multinomial(action_probs, 1).item()
-            action = action % len(self.env.action_space)
+            action_prob, _ = self.model(state_tensor)
+            action_prob = action_prob.view(self.batch, 4)
+            action_prob = torch.mean(action_prob, 0)
+            # print(f'{action_prob.shape=}')
+            action = torch.multinomial(action_prob, 1).item()
             return action
 
     def learn(self, transitions):
@@ -421,6 +423,8 @@ class PPOAgent:
         action_probs_old, value_old = self.model(state_batch.unsqueeze(0))
         
         # convert probabilities
+        action_probs_old = F.softmax(action_probs_old, dim=-1)
+        
         action_probs_old = action_probs_old.view(self.batch, 4)
         action_probs_old = torch.multinomial(action_probs_old, 1, replacement=True)
         
@@ -433,36 +437,49 @@ class PPOAgent:
         
         for _ in range(EPOCH):
             action_probs, value = self.model(state_batch)
-            action_probs = action_probs.gather(1, action_batch.unsqueeze(1)).squeeze(1)
+            # if (action_probs <= 0).any():
+            #     print("Warning: Zero or negative values found in action probabilities.")
+            action_probs = F.softmax(action_probs, dim=-1)
+            action_probs = action_probs.view(self.batch, 4)
+            action_probs = torch.multinomial(action_probs, 1, replacement=True)
+            action_probs = action_probs.gather(0, action_batch.unsqueeze(1))
             
-            # Policy loss
-            ratio = torch.exp(torch.log(action_probs) - torch.log(action_probs_old))
-            policy_loss = -torch.mean(torch.min(ratio * advantages, torch.clamp(ratio, 1-self.epsilon, 1+self.epsilon) * advantages))
-            
+             # Policy loss
+            EPSILON = 1e-8  # Small epsilon value to prevent division by zero
+
+            ratio = torch.exp(torch.log(action_probs + EPSILON) - torch.log(action_probs_old + EPSILON))
+            # print(f'Ratio shape: {ratio.shape}, Advantages shape: {advantages.shape}')
+            # print(f'Ratio values: {ratio}, Advantages values: {advantages}')
+            policy_loss = -torch.mean(torch.min(ratio * advantages.unsqueeze(1), torch.clamp(ratio, 1-self.epsilon, 1+self.epsilon) * advantages.unsqueeze(1)))
+            print(f'Policy loss value: {policy_loss.item()}')
+                
             # Value loss
             value_loss = self.loss_fn_value(value, returns)
+            print(f'Value loss value: {value_loss.item()}')
             
             # Total loss
             loss = policy_loss + value_loss
             
+            print(f'Total loss value: {loss.item()}', end='\n\n')
+            
             # Gradient descent
             self.optimizer.zero_grad()
-            loss.backward()
+            loss.backward(retain_graph=True)
             self.optimizer.step()
     
     def _compute_returns(self, rewards, value_next, dones):
         returns = torch.zeros_like(rewards)
         running_return = value_next.detach()
         for t in reversed(range(len(rewards))):
-            running_return = rewards[t] + self.gamma * running_return * (1 - dones[t])
-            returns[t] = running_return
+            # Make sure running_return is a scalar if it's a single value
+            returns[t] = running_return[:,t]
         return returns.detach()
     
     def _compute_advantages(self, rewards, value_next, value_old, dones):
         advantages = torch.zeros_like(rewards)
         running_advantage = torch.tensor(0.0).to(self.device)
         for t in reversed(range(len(rewards))):
-            td_error = rewards[t] + self.gamma * value_next[t] * (1 - dones[t]) - value_old[t]
+            td_error = rewards[t] + self.gamma * value_next[:,t] * (1 - dones[t]) - value_old[:,t]
             running_advantage = td_error + self.gamma * self.clip_value * (1 - dones[t]) * running_advantage
             advantages[t] = running_advantage
         return advantages
