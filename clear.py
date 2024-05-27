@@ -290,24 +290,7 @@ class EnvVisualizer():
 
 
 
-def load_data(split = 0.8):
-    with open('memory.pkl', 'rb') as f:
-        memory = pickle.load(f)
-    
-    labels = []
-    data = []
-    
-    for log in memory:
-        temp_labels = [0, 0, 0, 0]
-        temp_labels[log['action']] = 1
-        labels.append(temp_labels)
-        data.append(log['obs'])
-    
-    data = np.array(data)
-    labels = np.array(labels)
-    
-    return data[:int(len(data)*split)], labels[:int(len(data)*split)], data[int(len(data)*split):], labels[int(len(data)*split):]
-    
+
 
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
