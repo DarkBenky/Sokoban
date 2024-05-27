@@ -157,10 +157,11 @@ class SokobanEnv:
 
 
 class EnvVisualizer():
-    def __init__(self, ENV):
+    def __init__(self, ENV , model):
+        self.model = model
         self.ENV = ENV
-        self.WIDTH = 200
-        self.HEIGHT = 200
+        self.WIDTH = 600
+        self.HEIGHT = 600
         self.grid_size = min(self.WIDTH // ENV.obs.shape[1], self.HEIGHT // ENV.obs.shape[0])
 
         self.barrier_color = (128, 128, 128)
@@ -179,9 +180,21 @@ class EnvVisualizer():
             self.memory = pickle.load(open('memory.pkl', 'rb'))
         except:
             self.memory = []
-
+            
+    def clear_to_win(self):
+        length = len(self.memory) - 1
+        found = False
+        
+        while found != True:
+            if self.memory[length]['win'] == True:
+                return
+            self.memory.pop(length)
+            length -= 1
+            
+                
     def save_memory_reset(self, obs , action , win):
         self.memory.append({
+            'version': 0.1,
             'obs': obs,
             'action': action,
             'win' : win
@@ -190,7 +203,7 @@ class EnvVisualizer():
             pickle.dump(self.memory, open('memory.pkl', 'wb'))
             self.ENV.reset()
 
-    def draw_grid(self):
+    def draw_grid(self, labels):
         for x, row in enumerate(self.ENV.obs):
             for y, cell in enumerate(row):
                 if cell[0] != 0:
@@ -204,6 +217,43 @@ class EnvVisualizer():
                 else:
                     color = self.empty_color
                 pygame.draw.rect(self.screen, color, (y * self.grid_size, x * self.grid_size, self.grid_size, self.grid_size))
+
+        # Get player's position in pixels
+        player_x_pixel = self.ENV.playerXY[1] * self.grid_size
+        player_y_pixel = self.ENV.playerXY[0] * self.grid_size
+
+        # Define label positions relative to the player
+        label_up_pos = (player_x_pixel, player_y_pixel - self.grid_size)
+        label_down_pos = (player_x_pixel, player_y_pixel + self.grid_size)
+        label_left_pos = (player_x_pixel - self.grid_size, player_y_pixel)
+        label_right_pos = (player_x_pixel + self.grid_size, player_y_pixel)
+
+        # Write the probability of each action
+        font = pygame.font.Font(None, 18)
+        label_up = font.render(str(labels[0][0]), True, (0, 0, 0))
+        label_down = font.render(str(labels[0][1]), True, (0, 0, 0))
+        label_left = font.render(str(labels[0][2]), True, (0, 0, 0))
+        label_right = font.render(str(labels[0][3]), True, (0, 0, 0))
+
+        # Blit labels on squares around the player
+        self.screen.blit(label_up, label_up_pos)
+        self.screen.blit(label_down, label_down_pos)
+        self.screen.blit(label_left, label_left_pos)
+        self.screen.blit(label_right, label_right_pos)
+        
+        # Draw the heat map of the actions
+        for i, label in enumerate(labels[0]):
+            color = 255 * label
+            color = (0, color, 0)
+            if i == 0:
+                pygame.draw.rect(self.screen, color, (player_x_pixel, player_y_pixel - self.grid_size, self.grid_size, self.grid_size), 3)
+            elif i == 1:
+                pygame.draw.rect(self.screen, color, (player_x_pixel, player_y_pixel + self.grid_size, self.grid_size, self.grid_size), 3)
+            elif i == 2:
+                pygame.draw.rect(self.screen, color, (player_x_pixel - self.grid_size, player_y_pixel, self.grid_size, self.grid_size), 3)
+            elif i == 3:
+                pygame.draw.rect(self.screen, color, (player_x_pixel + self.grid_size, player_y_pixel, self.grid_size, self.grid_size), 3)
+        
 
     def main(self):
         clock = pygame.time.Clock()
@@ -226,18 +276,102 @@ class EnvVisualizer():
                         obs , win = self.ENV.step(3)
                         self.save_memory_reset(obs , 3 , win)
                     elif event.key == pygame.K_r:
+                        self.clear_to_win()
                         self.ENV.reset()
                    
-                    
+            prepared_data = self.ENV.obs.reshape(1, 10, 10, 4)
+            labels = model.predict(prepared_data) 
 
             self.screen.fill(self.empty_color)
-            self.draw_grid()
+            self.draw_grid(labels)
             pygame.display.update()
             clock.tick(60)
 
+
+
+
+def load_data(split = 0.8):
+    with open('memory.pkl', 'rb') as f:
+        memory = pickle.load(f)
+    
+    labels = []
+    data = []
+    
+    for log in memory:
+        temp_labels = [0, 0, 0, 0]
+        temp_labels[log['action']] = 1
+        labels.append(temp_labels)
+        data.append(log['obs'])
+    
+    data = np.array(data)
+    labels = np.array(labels)
+    
+    return data[:int(len(data)*split)], labels[:int(len(data)*split)], data[int(len(data)*split):], labels[int(len(data)*split):]
+    
+
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import ModelCheckpoint
+
+checkpoint = ModelCheckpoint(
+    'best_sokoban_model.keras',      
+    monitor='val_accuracy',       
+    verbose=1,                     
+    save_best_only=True,          
+    mode='max',                    
+    save_weights_only=False      
+)
+
+
+model = Sequential()
+
+# Add convolutional layers
+model.add(Conv2D(32, (3, 3), activation='relu', input_shape=(10, 10, 4)))
+model.add(MaxPooling2D((2, 2)))
+
+model.add(Conv2D(64, (3, 3), activation='relu'))
+model.add(MaxPooling2D((2, 2)))
+
+model.add(Flatten())
+
+# Add dense layers
+model.add(Dense(128, activation='relu'))
+model.add(Dropout(0.2))
+model.add(Dense(256, activation='relu'))
+model.add(Dropout(0.2))
+model.add(Dense(256, activation='relu'))
+
+# Output layer for multi-label classification
+model.add(Dense(4, activation='softmax'))  # 4 output labels
+
+
+# train_data, train_labels, test_data, test_labels = load_data()
+
+# input_shape = train_data[0].shape
+# num_classes = train_labels[0].shape[0]
+
+# model.compile(optimizer=Adam(learning_rate=0.001), loss='categorical_crossentropy', metrics=['accuracy'])
+
+# model.fit(
+#     train_data, 
+#     train_labels, 
+#     epochs=100, 
+#     batch_size=512, 
+#     validation_data=(test_data, test_labels),
+#     callbacks=[checkpoint]
+# )
+
+# # Evaluate the model
+# test_loss, test_acc = model.evaluate(test_data, test_labels)
+# print("Test accuracy:", test_acc)
+
+# load the best model
+model.load_weights('best_sokoban_model.keras')
+
 barriers, player_x, player_y, box, goals = load_function_from_json('maps')
 env = SokobanEnv((player_x, player_y), barriers, box, goals)
-visualizer = EnvVisualizer(env)
+visualizer = EnvVisualizer(env , model)
 
 visualizer.main()
-    

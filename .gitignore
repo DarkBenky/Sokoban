@@ -2,3 +2,6 @@
 *.zip
 # ignore wandb logs
 wandb/
+.vscode/
+.venv/
+AI/
