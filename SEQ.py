@@ -97,7 +97,7 @@ model = Sequential([
 model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
 # Train the model with checkpoint saving and TensorBoard logging
-model.fit(train_seq, train_labels_seq, epochs=250, batch_size=512, 
+model.fit(train_seq, train_labels_seq, epochs=500, batch_size=512, 
           callbacks=[checkpoint_callback, tensorboard_callback], validation_split=0.2)
 
 # Load the best saved model
