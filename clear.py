@@ -151,9 +151,14 @@ class SokobanEnv:
         self.boxes = np.array(box)
         self.goals = np.array(goals)
         self.obs = self.construct_obs()
+        
+    def copy(self):
+        return SokobanEnv(self.playerXY, self.barriers, self.boxes, self.goals)
 
 
 
+import tensorflow as tf
+import time
 
 
 class EnvVisualizer():
@@ -172,8 +177,44 @@ class EnvVisualizer():
         pygame.init()
         self.screen = pygame.display.set_mode((self.WIDTH, self.HEIGHT))
         pygame.display.set_caption("Sokoban")
-
+        self.current_step = 0
+        self.max_seq_len = 64
+        self.Seq_data = np.zeros((1, self.max_seq_len, 10 * 10 * 4))
+        self.Seq_data[0][0] = ENV.obs.reshape(10 * 10 * 4)
+        self.moves = []
+        # load the sequential model
+        self.model = tf.keras.models.load_model('LSTM-seq3078.keras')
+        
+        
         self.load_memory()
+        
+    def fill_seq_data(self):
+        temp_env = self.ENV.copy()
+        actions = []
+        print(self.Seq_data.shape)
+        for i in range(self.current_step, self.max_seq_len - 1):
+            predicted = self.model.predict(self.Seq_data)
+            # Decode the one-hot encoded labels
+            action = np.argmax(predicted[0][i])
+            actions.append(action)
+            obs, win = temp_env.step(action)
+            self.Seq_data[0][i + 1] = obs.reshape(10 * 10 * 4)
+            if win:
+                print('win')
+                return actions , True
+        return actions , False
+     
+     
+    def add_to_seq_data(self, obs):
+        if self.current_step < self.max_seq_len - 1:
+            self.Seq_data[0][self.current_step] = obs.reshape(10 * 10 * 4)
+            self.current_step += 1
+        else:
+            self.Seq_data[0][:self.max_seq_len // 2] = self.Seq_data[0][self.max_seq_len // 2:]
+            self.Seq_data[0][self.max_seq_len // 2:] = np.zeros((self.max_seq_len // 2, 10 * 10 * 4))
+            self.Seq_data[0][self.max_seq_len // 2] = obs.reshape(10 * 10 * 4)
+            self.current_step = self.max_seq_len // 2 + 1
+            
 
     def load_memory(self):
         try:
@@ -254,8 +295,33 @@ class EnvVisualizer():
             elif i == 3:
                 pygame.draw.rect(self.screen, color, (player_x_pixel + self.grid_size, player_y_pixel, self.grid_size, self.grid_size), 3)
         
+        if len(self.moves) == 0:
+            return
+        
+        # draw the moves
+        box_x = player_x_pixel
+        box_y = player_y_pixel
+        
+        color = 255 / 8
+        for i, move in enumerate(self.moves):
+            if i > 8:
+                break
+            if move == 0:
+                box_y -= self.grid_size
+            elif move == 1:
+                box_y += self.grid_size
+            elif move == 2:
+                box_x -= self.grid_size
+            elif move == 3:
+                box_x += self.grid_size
+            elif move == 4:
+                # continue to the next sequence
+                continue
+                
+            pygame.draw.rect(self.screen, (0 , color*i , color*i), (box_x, box_y, self.grid_size, self.grid_size), 3)
+                
 
-    def main(self):
+    def main(self , desable_ai = False):
         clock = pygame.time.Clock()
         while True:
             for event in pygame.event.get():
@@ -263,21 +329,52 @@ class EnvVisualizer():
                     pygame.quit()
                     sys.exit()
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_UP:
-                        obs , win = self.ENV.step(0)
-                        self.save_memory_reset(obs , 0 , win)
-                    elif event.key == pygame.K_DOWN:
-                        obs , win = self.ENV.step(1)
-                        self.save_memory_reset(obs , 1 , win)
-                    elif event.key == pygame.K_LEFT:
-                        obs , win = self.ENV.step(2)
-                        self.save_memory_reset(obs , 2 , win)
-                    elif event.key == pygame.K_RIGHT:
-                        obs , win = self.ENV.step(3)
-                        self.save_memory_reset(obs , 3 , win)
+                    if event.key in [pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT]:
+                        if event.key == pygame.K_UP:
+                            action = 0
+                        elif event.key == pygame.K_DOWN:
+                            action = 1
+                        elif event.key == pygame.K_LEFT:
+                            action = 2
+                        elif event.key == pygame.K_RIGHT:
+                            action = 3
+
+                        self.current_step += 1
+                        obs, win = self.ENV.step(action)
+                        if not desable_ai:
+                            self.add_to_seq_data(obs)
+                            self.save_memory_reset(obs, action, win)
+                            self.moves  , win_seq = self.fill_seq_data()
+                        
+                            if win_seq:
+                                obs_seq = []
+                                actions_seq = []
+                                wins = []
+                                for move in self.moves:
+                                    obs , win_real = self.ENV.step(move)
+                                    self.draw_grid([[0, 0, 0, 0, 0]])
+                                    pygame.display.update()
+                                    time.sleep(0.2)
+                                    obs_seq.append(obs)
+                                    actions_seq.append(move)
+                                    wins.append(win_real)
+                                    if win_real:
+                                        for i in range(len(obs_seq)):
+                                            self.save_memory_reset(obs_seq[i], actions_seq[i], wins[i])
+                                        self.clear_to_win()
+                                        self.ENV.reset()
+                                        self.Seq_data = np.zeros((1, self.max_seq_len, 10 * 10 * 4))
+                                        self.Seq_data[0][0] = self.ENV.obs.reshape(10 * 10 * 4)
+                                        self.current_step = 0
+                        else:
+                            self.save_memory_reset(obs, action, win)
+                        
                     elif event.key == pygame.K_r:
                         self.clear_to_win()
                         self.ENV.reset()
+                        self.Seq_data = np.zeros((1, self.max_seq_len, 10 * 10 * 4))
+                        self.Seq_data[0][0] = self.ENV.obs.reshape(10 * 10 * 4)
+                        self.current_step = 0
                    
             prepared_data = self.ENV.obs.reshape(1, 10, 10, 4)
             labels = model.predict(prepared_data) 
@@ -292,7 +389,7 @@ class EnvVisualizer():
 
 
 
-import tensorflow as tf
+
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
 from tensorflow.keras.optimizers import Adam
@@ -357,4 +454,4 @@ barriers, player_x, player_y, box, goals = load_function_from_json('maps')
 env = SokobanEnv((player_x, player_y), barriers, box, goals)
 visualizer = EnvVisualizer(env , model)
 
-visualizer.main()
+visualizer.main(True)
