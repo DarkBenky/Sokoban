@@ -132,6 +132,11 @@ class SokobanEnv:
 
     
     def step(self, action):
+        """
+        Take a step in the environment based on the selected action
+        :param action: int, action index
+        :return: np.array, new observation , bool, win status , bool, valid move
+        """
         # Take a step in the environment based on the selected action
         direction = self.get_direction_from_action(action)
 
@@ -140,8 +145,10 @@ class SokobanEnv:
         if success:
             self.obs = self.construct_obs()
             if self.is_win():
-                return self.obs , True
-        return self.obs , False
+                return self.obs , True , True
+            else:
+                return self.obs , False , True
+        return self.obs , False , False
     
     def reset(self):
         barriers, player_x, player_y, box, goals = load_function_from_json('maps')
@@ -151,6 +158,7 @@ class SokobanEnv:
         self.boxes = np.array(box)
         self.goals = np.array(goals)
         self.obs = self.construct_obs()
+        return self.obs
         
     def copy(self):
         return SokobanEnv(self.playerXY, self.barriers, self.boxes, self.goals)
@@ -385,6 +393,94 @@ class EnvVisualizer():
             clock.tick(60)
 
 
+from collections import deque
+
+class DQNAgent:
+    def __init__(self, state_shape, action_size, learning_rate=0.001, gamma=0.99, epsilon=1.0, epsilon_min=0.01, epsilon_decay=0.995):
+        self.state_shape = state_shape
+        self.action_size = action_size
+        self.learning_rate = learning_rate
+        self.gamma = gamma
+        self.epsilon = epsilon
+        self.epsilon_min = epsilon_min
+        self.epsilon_decay = epsilon_decay
+        self.model = self.build_model()
+        self.replay_buffer = deque(maxlen=10000)
+
+    def build_model(self):
+        model = tf.keras.Sequential([
+            tf.keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=self.state_shape),
+            tf.keras.layers.MaxPooling2D((2, 2)),
+            tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
+            tf.keras.layers.MaxPooling2D((2, 2)),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(128, activation='relu'),
+            tf.keras.layers.Dense(self.action_size, activation='linear')
+        ])
+        model.compile(loss='mse', optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate))
+        return model
+
+    def remember(self, state, action, reward, next_state, done):
+        self.replay_buffer.append((state, action, reward, next_state, done))
+
+    def act(self, state):
+        if np.random.rand() <= self.epsilon:
+            return np.random.choice(self.action_size)
+        q_values = self.model.predict(state)
+        return np.argmax(q_values[0])
+
+    def replay(self, batch_size):
+        if len(self.replay_buffer) < batch_size:
+            return
+        minibatch = random.sample(self.replay_buffer, batch_size)
+        for state, action, reward, next_state, done in minibatch:
+            target = reward
+            if not done:
+                target = (reward + self.gamma * np.amax(self.model.predict(next_state)[0]))
+            target_f = self.model.predict(state)
+            target_f[0][action] = target
+            self.model.fit(state, target_f, epochs=1, verbose=1)
+        if self.epsilon > self.epsilon_min:
+            self.epsilon *= self.epsilon_decay
+
+
+# Instantiate the environment and agent
+barriers, player_x, player_y, box, goals = load_function_from_json('maps')
+env = SokobanEnv((player_x, player_y), barriers, box, goals)
+state_shape = env.obs.shape
+action_size = 4
+agent = DQNAgent(state_shape, action_size)
+EPISODES = 10_000
+MAX_MOVES = 256
+BATCH_SIZE = 256
+
+# Training loop
+for episode in range(EPISODES):
+    state = env.reset()
+    state = np.reshape(state, [1, state_shape[0], state_shape[1], state_shape[2]])
+    total_reward = 0
+    done = False
+    iteration = 0
+    while not done and iteration < MAX_MOVES:
+        action = agent.act(state)
+        next_state, done , valid_move = env.step(action)
+        if done:
+            reward = 10
+            print('win')
+        else:
+            reward = -0.1
+        if valid_move:
+            reward = 0.1
+        else:
+            reward = -0.5
+        next_state = np.reshape(next_state, [1, state_shape[0], state_shape[1], state_shape[2]])
+        agent.remember(state, action, reward, next_state, done)
+        state = next_state
+        total_reward += reward
+        if done:
+            print("episode: {}/{}, score: {}".format(episode, EPISODES, total_reward))
+            break
+        agent.replay(BATCH_SIZE)
 
 
 
