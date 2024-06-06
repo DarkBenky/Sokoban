@@ -15,3 +15,5 @@ Test accuracy for architecture [256, 128, 64] with params {'dropout_rate': 0.1, 
 Model path: models/LSTM-seq_128_0.1_7584.keras
 Test accuracy for architecture [256, 128, 64] with params {'dropout_rate': 0.3, 'max_seq_len': 64, 'epochs': 400, 'batch_size': 1024}: 0.8613911271095276
 Model path: models/LSTM-seq_1024_0.3_4299.keras
+Test accuracy for architecture [256, 128, 64] with params {'dropout_rate': 0.5, 'max_seq_len': 64, 'epochs': 1000, 'batch_size': 32}: 0.8840726017951965
+Model path: models/LSTM-seq_32_0.5_632.keras

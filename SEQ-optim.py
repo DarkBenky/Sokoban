@@ -102,7 +102,7 @@ train_seq, train_labels_seq, test_seq, test_labels_seq = whole_sequences(0.95, m
 
 # Define the different architectures and parameters to try
 architectures = [
-    [256, 128, 64],
+    [256, 256, 128],
     [512, 256, 128],
     [128, 64],
     [256, 128],
