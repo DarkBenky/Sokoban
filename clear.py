@@ -6,7 +6,39 @@ import json
 import sys
 import pygame
 
-def load_function_from_json(folder_path = 'maps' , map_name = None , rnd = True):
+def load_function_from_json(folder_path = 'maps' , map_name = None , rnd = True , check_if_arena_exists = True):
+
+    if check_if_arena_exists:
+        memory = pickle.load(open('memory.pkl', 'rb'))
+
+        run_data = []
+        run_labels = []
+
+        pointer = 0
+        while pointer < len(memory):
+            for i in range(pointer, len(memory)):
+                if memory[i]['win']:
+                    temp_s = [log['obs'] for log in memory[pointer:i+1]]
+                    temp_l_s = [log['action'] for log in memory[pointer:i+1]]
+
+                    pointer = i + 1
+
+                    run_data.append(temp_s)
+                    run_labels.append(temp_l_s)
+                    break
+        
+    def contract_obs():
+        obs = np.zeros((10,10,4), dtype=np.int8)
+        encoding = np.int8(255)
+        obs[player_x][player_y][0] = encoding
+        for x, y in box:
+            obs[x][y][1] = encoding
+        for x, y in goals:
+            obs[x][y][2] = encoding
+        for x, y in barriers:
+            obs[x][y][3] = encoding
+        return obs
+        
     files = [f for f in os.listdir(folder_path) if f.endswith('.json')]
 
     if not files:
@@ -42,6 +74,12 @@ def load_function_from_json(folder_path = 'maps' , map_name = None , rnd = True)
             player_x = random.randint(0, 9)
             player_y = random.randint(0, 9)
             if [player_x, player_y] not in box and [player_x, player_y] not in barriers:
+                obs = contract_obs()
+                for run in run_data:
+                    if not np.array_equal(obs, run[0]):
+                        continue
+                    else:
+                        break
                 done = True
     
     return barriers, player_x, player_y, box, goals
@@ -191,7 +229,7 @@ class EnvVisualizer():
         self.Seq_data[0][0] = ENV.obs.reshape(10 * 10 * 4)
         self.moves = []
         # load the sequential model
-        self.model = tf.keras.models.load_model('LSTM-seq3078.keras')
+        self.model = tf.keras.models.load_model('models/LSTM-seq_128_0.3_8504.keras')
         
         
         self.load_memory()

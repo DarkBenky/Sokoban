@@ -1,0 +1,17 @@
+NOTE: LSTM units are not used :) architecture is the defining the model
+Test accuracy for architecture [256, 128, 64] with params {'lstm_units': 256, 'dropout_rate': 0.5, 'max_seq_len': 64, 'epochs': 500, 'batch_size': 512}: 0.8701508641242981
+Model path: models/LSTM-seq_256_0.5_7327.keras
+Test accuracy for architecture [256, 128, 64] with params {'lstm_units': 128, 'dropout_rate': 0.3, 'max_seq_len': 64, 'epochs': 300, 'batch_size': 256}: 0.8787715435028076
+Model path: models/LSTM-seq_128_0.3_8504.keras
+Test accuracy for architecture [256, 128, 64] with params {'lstm_units': 512, 'dropout_rate': 0.3, 'max_seq_len': 64, 'epochs': 400, 'batch_size': 512}: 0.875
+Model path: models/LSTM-seq_512_0.3_6108.keras
+Test accuracy for architecture [256, 128, 64] with params {'dropout_rate': 0.5, 'max_seq_len': 64, 'epochs': 500, 'batch_size': 512}: 0.8598790168762207
+Model path: models/LSTM-seq_512_0.5_6034.keras
+Test accuracy for architecture [256, 128, 64] with params {'dropout_rate': 0.3, 'max_seq_len': 64, 'epochs': 750, 'batch_size': 256}: 0.8881048560142517
+Model path: models/LSTM-seq_256_0.3_444.keras
+Test accuracy for architecture [256, 128, 64] with params {'dropout_rate': 0.2, 'max_seq_len': 64, 'epochs': 600, 'batch_size': 512}: 0.8795362710952759
+Model path: models/LSTM-seq_512_0.2_5878.keras
+Test accuracy for architecture [256, 128, 64] with params {'dropout_rate': 0.1, 'max_seq_len': 64, 'epochs': 800, 'batch_size': 128}: 0.8951612710952759
+Model path: models/LSTM-seq_128_0.1_7584.keras
+Test accuracy for architecture [256, 128, 64] with params {'dropout_rate': 0.3, 'max_seq_len': 64, 'epochs': 400, 'batch_size': 1024}: 0.8613911271095276
+Model path: models/LSTM-seq_1024_0.3_4299.keras
