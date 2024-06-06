@@ -203,9 +203,20 @@ class EnvVisualizer():
         for i in range(self.current_step, self.max_seq_len - 1):
             predicted = self.model.predict(self.Seq_data)
             # Decode the one-hot encoded labels
+            temp_env_seq = self.ENV.copy()
+            temp_action = []
+            for action in predicted[0]:
+                current_action = np.argmax(action)
+                if current_action == 4:
+                    break
+                temp_action.append(current_action)
+                obs , win , _ = temp_env_seq.step(current_action)
+                if win:
+                    print('win')
+                    return temp_action , True
             action = np.argmax(predicted[0][i])
             actions.append(action)
-            obs, win = temp_env.step(action)
+            obs, win , valid_move = temp_env.step(action)
             self.Seq_data[0][i + 1] = obs.reshape(10 * 10 * 4)
             if win:
                 print('win')
@@ -348,7 +359,7 @@ class EnvVisualizer():
                             action = 3
 
                         self.current_step += 1
-                        obs, win = self.ENV.step(action)
+                        obs, win , valid_move = self.ENV.step(action)
                         if not desable_ai:
                             self.add_to_seq_data(obs)
                             self.save_memory_reset(obs, action, win)
@@ -359,7 +370,7 @@ class EnvVisualizer():
                                 actions_seq = []
                                 wins = []
                                 for move in self.moves:
-                                    obs , win_real = self.ENV.step(move)
+                                    obs , win_real , _= self.ENV.step(move)
                                     self.draw_grid([[0, 0, 0, 0, 0]])
                                     pygame.display.update()
                                     time.sleep(0.2)
@@ -375,7 +386,8 @@ class EnvVisualizer():
                                         self.Seq_data[0][0] = self.ENV.obs.reshape(10 * 10 * 4)
                                         self.current_step = 0
                         else:
-                            self.save_memory_reset(obs, action, win)
+                            if valid_move:
+                                self.save_memory_reset(obs, action, win)
                         
                     elif event.key == pygame.K_r:
                         self.clear_to_win()
@@ -393,94 +405,94 @@ class EnvVisualizer():
             clock.tick(60)
 
 
-from collections import deque
+# from collections import deque
 
-class DQNAgent:
-    def __init__(self, state_shape, action_size, learning_rate=0.001, gamma=0.99, epsilon=1.0, epsilon_min=0.01, epsilon_decay=0.995):
-        self.state_shape = state_shape
-        self.action_size = action_size
-        self.learning_rate = learning_rate
-        self.gamma = gamma
-        self.epsilon = epsilon
-        self.epsilon_min = epsilon_min
-        self.epsilon_decay = epsilon_decay
-        self.model = self.build_model()
-        self.replay_buffer = deque(maxlen=10000)
+# class DQNAgent:
+#     def __init__(self, state_shape, action_size, learning_rate=0.001, gamma=0.99, epsilon=1.0, epsilon_min=0.01, epsilon_decay=0.995):
+#         self.state_shape = state_shape
+#         self.action_size = action_size
+#         self.learning_rate = learning_rate
+#         self.gamma = gamma
+#         self.epsilon = epsilon
+#         self.epsilon_min = epsilon_min
+#         self.epsilon_decay = epsilon_decay
+#         self.model = self.build_model()
+#         self.replay_buffer = deque(maxlen=10000)
 
-    def build_model(self):
-        model = tf.keras.Sequential([
-            tf.keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=self.state_shape),
-            tf.keras.layers.MaxPooling2D((2, 2)),
-            tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
-            tf.keras.layers.MaxPooling2D((2, 2)),
-            tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(128, activation='relu'),
-            tf.keras.layers.Dense(self.action_size, activation='linear')
-        ])
-        model.compile(loss='mse', optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate))
-        return model
+#     def build_model(self):
+#         model = tf.keras.Sequential([
+#             tf.keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=self.state_shape),
+#             tf.keras.layers.MaxPooling2D((2, 2)),
+#             tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
+#             tf.keras.layers.MaxPooling2D((2, 2)),
+#             tf.keras.layers.Flatten(),
+#             tf.keras.layers.Dense(128, activation='relu'),
+#             tf.keras.layers.Dense(self.action_size, activation='linear')
+#         ])
+#         model.compile(loss='mse', optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate))
+#         return model
 
-    def remember(self, state, action, reward, next_state, done):
-        self.replay_buffer.append((state, action, reward, next_state, done))
+#     def remember(self, state, action, reward, next_state, done):
+#         self.replay_buffer.append((state, action, reward, next_state, done))
 
-    def act(self, state):
-        if np.random.rand() <= self.epsilon:
-            return np.random.choice(self.action_size)
-        q_values = self.model.predict(state)
-        return np.argmax(q_values[0])
+#     def act(self, state):
+#         if np.random.rand() <= self.epsilon:
+#             return np.random.choice(self.action_size)
+#         q_values = self.model.predict(state)
+#         return np.argmax(q_values[0])
 
-    def replay(self, batch_size):
-        if len(self.replay_buffer) < batch_size:
-            return
-        minibatch = random.sample(self.replay_buffer, batch_size)
-        for state, action, reward, next_state, done in minibatch:
-            target = reward
-            if not done:
-                target = (reward + self.gamma * np.amax(self.model.predict(next_state)[0]))
-            target_f = self.model.predict(state)
-            target_f[0][action] = target
-            self.model.fit(state, target_f, epochs=1, verbose=1)
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
+#     def replay(self, batch_size):
+#         if len(self.replay_buffer) < batch_size:
+#             return
+#         minibatch = random.sample(self.replay_buffer, batch_size)
+#         for state, action, reward, next_state, done in minibatch:
+#             target = reward
+#             if not done:
+#                 target = (reward + self.gamma * np.amax(self.model.predict(next_state)[0]))
+#             target_f = self.model.predict(state)
+#             target_f[0][action] = target
+#             self.model.fit(state, target_f, epochs=1, verbose=1)
+#         if self.epsilon > self.epsilon_min:
+#             self.epsilon *= self.epsilon_decay
 
 
-# Instantiate the environment and agent
-barriers, player_x, player_y, box, goals = load_function_from_json('maps')
-env = SokobanEnv((player_x, player_y), barriers, box, goals)
-state_shape = env.obs.shape
-action_size = 4
-agent = DQNAgent(state_shape, action_size)
-EPISODES = 10_000
-MAX_MOVES = 256
-BATCH_SIZE = 256
+# # Instantiate the environment and agent
+# barriers, player_x, player_y, box, goals = load_function_from_json('maps')
+# env = SokobanEnv((player_x, player_y), barriers, box, goals)
+# state_shape = env.obs.shape
+# action_size = 4
+# agent = DQNAgent(state_shape, action_size)
+# EPISODES = 10_000
+# MAX_MOVES = 256
+# BATCH_SIZE = 256
 
-# Training loop
-for episode in range(EPISODES):
-    state = env.reset()
-    state = np.reshape(state, [1, state_shape[0], state_shape[1], state_shape[2]])
-    total_reward = 0
-    done = False
-    iteration = 0
-    while not done and iteration < MAX_MOVES:
-        action = agent.act(state)
-        next_state, done , valid_move = env.step(action)
-        if done:
-            reward = 10
-            print('win')
-        else:
-            reward = -0.1
-        if valid_move:
-            reward = 0.1
-        else:
-            reward = -0.5
-        next_state = np.reshape(next_state, [1, state_shape[0], state_shape[1], state_shape[2]])
-        agent.remember(state, action, reward, next_state, done)
-        state = next_state
-        total_reward += reward
-        if done:
-            print("episode: {}/{}, score: {}".format(episode, EPISODES, total_reward))
-            break
-        agent.replay(BATCH_SIZE)
+# # Training loop
+# for episode in range(EPISODES):
+#     state = env.reset()
+#     state = np.reshape(state, [1, state_shape[0], state_shape[1], state_shape[2]])
+#     total_reward = 0
+#     done = False
+#     iteration = 0
+#     while not done and iteration < MAX_MOVES:
+#         action = agent.act(state)
+#         next_state, done , valid_move = env.step(action)
+#         if done:
+#             reward = 10
+#             print('win')
+#         else:
+#             reward = -0.1
+#         if valid_move:
+#             reward = 0.1
+#         else:
+#             reward = -0.5
+#         next_state = np.reshape(next_state, [1, state_shape[0], state_shape[1], state_shape[2]])
+#         agent.remember(state, action, reward, next_state, done)
+#         state = next_state
+#         total_reward += reward
+#         if done:
+#             print("episode: {}/{}, score: {}".format(episode, EPISODES, total_reward))
+#             break
+#         agent.replay(BATCH_SIZE)
 
 
 

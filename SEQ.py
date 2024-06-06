@@ -6,6 +6,13 @@ from tensorflow.keras.layers import LSTM, Dense, Reshape , Dropout
 import random
 import pickle
 
+def remove_duplicate_from_array(data : np.array):
+    data = data.tolist()
+    for log in data:
+        if log in data:
+            data.remove(log)
+    return np.array(data)
+
 def whole_sequences(split=0.8, max_seq_len=64):
     with open('memory.pkl', 'rb') as f:
         memory = pickle.load(f)
@@ -28,6 +35,7 @@ def whole_sequences(split=0.8, max_seq_len=64):
                     temp_s = np.concatenate([temp_s, np.zeros((max_seq_len - len(temp_s), 10, 10, 4), dtype=np.int8)])
                     # Pad the labels with the last action with number 4
                     temp_l_s = np.concatenate([temp_l_s, np.full((max_seq_len - len(temp_l_s)), 4, dtype=np.int8)])
+
                 
                 # Reshape the input data to be compatible with LSTM
                 temp_s = temp_s.reshape(max_seq_len, 10*10*4)
@@ -42,7 +50,9 @@ def whole_sequences(split=0.8, max_seq_len=64):
                 break
         
     data_seq = np.array(data_seq)
+    data_seq = remove_duplicate_from_array(data_seq)
     label_seq = np.array(label_seq)
+    label_seq = remove_duplicate_from_array(label_seq)
             
     return data_seq[:int(len(data_seq)*split)], label_seq[:int(len(data_seq)*split)], data_seq[int(len(data_seq)*split):], label_seq[int(len(data_seq)*split):]
 
