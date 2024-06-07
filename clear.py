@@ -229,7 +229,7 @@ class EnvVisualizer():
         self.Seq_data[0][0] = ENV.obs.reshape(10 * 10 * 4)
         self.moves = []
         # load the sequential model
-        self.model = tf.keras.models.load_model('models/LSTM-seq_128_0.3_8504.keras')
+        self.model = tf.keras.models.load_model('models/LSTM-seq_32_0.5_5564.keras')
         
         
         self.load_memory()
