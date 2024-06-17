@@ -51,13 +51,39 @@ def load_seq(length=8):
                 for s , l in zip(slices, actions):
                     if len(s) < length:
                         s = padding(s, length)
+                        s = s.reshape(length, 10*10*4)
+                        # One-hot encode the labels
+                        l = np.eye(5)[l]
                         data.append({'obs': s, 'action': l})
                     else:
+                        s = s.reshape(length, 10*10*4)
+                        # One-hot encode the labels
+                        l = np.eye(5)[l]
                         data.append({'obs': s, 'action': l})
     return data
                     
-print(load_seq(8))
+# print(load_seq(8))
 
+def remove_duplicate_from_array(data: list):
+    labels = []
+    samples = set()
+    unique_data = []
+
+    for log in data:
+        obs = log['obs']
+        action = log['action']
+        
+        # Flatten and convert to tuple to make it hashable
+        obs_flatten = tuple(obs.flatten())
+        
+        if obs_flatten not in samples:
+            samples.add(obs_flatten)
+            labels.append(action)
+            unique_data.append(obs)
+
+    return unique_data, labels
+
+# data , labels = remove_duplicate_from_array(load_seq(8))
 
 
     
