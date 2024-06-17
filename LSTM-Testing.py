@@ -7,7 +7,7 @@ import random
 import json
 
 # check for gpu availability
-print("Num GPUs Available: ", len(tf.test.is_gpu_available()))
+# print("Num GPUs Available: ", len(tf.test.is_gpu_available()))
 
 tensorboard_callback = TensorBoard(log_dir='./logs-LSTM', histogram_freq=1)
 
@@ -27,12 +27,12 @@ name = 'LSTM-' + str(random.randint(0, 1000)) + ".keras"
 checkpoint = ModelCheckpoint('models/LSTM'+name, monitor='val_loss', verbose=1, save_best_only=True, mode='min')
 
 model = Sequential([
-    LSTM(256, input_shape=(seq_length, 10*10*4) , return_sequences=True),
-    Dropout(0.5),
-    LSTM(128, return_sequences=True),
-    Dropout(0.5),
-    LSTM(64),
-    Dropout(0.5),
+    LSTM(128, input_shape=(seq_length, 10*10*4) , return_sequences=True),
+    Dropout(0.3),
+    LSTM(64, return_sequences=True),
+    Dropout(0.3),
+    LSTM(32),
+    Dropout(0.3),
     Dense(5, activation='softmax')
 ])
 
