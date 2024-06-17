@@ -7,7 +7,7 @@ import random
 import json
 
 # check for gpu availability
-print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
+print("Num GPUs Available: ", len(tf.test.is_gpu_available()))
 
 tensorboard_callback = TensorBoard(log_dir='./logs-LSTM', histogram_freq=1)
 
