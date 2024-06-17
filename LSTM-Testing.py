@@ -24,7 +24,7 @@ split = 0.8
 
 name = 'LSTM-' + str(random.randint(0, 1000)) + ".keras"
 
-checkpoint = ModelCheckpoint('models/LSTM'+name, monitor='val_loss', verbose=1, save_best_only=True, mode='min')
+checkpoint = ModelCheckpoint('models/LSTM/V2'+name, monitor='val_loss', verbose=1, save_best_only=True, mode='min')
 
 model = Sequential([
     LSTM(128, input_shape=(seq_length, 10*10*4) , return_sequences=True),
@@ -51,7 +51,7 @@ print(f"Test accuracy: {test_acc}")
 print(f"Test loss: {test_loss}")
 print(f"Model saved as {name}")
 
-with open('models/LSTM/model.json', 'w') as f:
+with open('models/LSTM/V2/model.json', 'w') as f:
     data = {
         'name': name,
         'accuracy': test_acc,
