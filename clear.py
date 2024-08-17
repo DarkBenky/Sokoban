@@ -537,7 +537,7 @@ class EnvVisualizer():
 
 
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout, LSTM, Reshape
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import ModelCheckpoint
 
@@ -554,47 +554,94 @@ checkpoint = ModelCheckpoint(
 model = Sequential()
 
 # Add convolutional layers
-model.add(Conv2D(32, (3, 3), activation='relu', input_shape=(10, 10, 4)))
+model.add(Conv2D(1024, (3, 3), activation='relu', input_shape=(10, 10, 4)))
 model.add(MaxPooling2D((2, 2)))
 
-model.add(Conv2D(64, (3, 3), activation='relu'))
+model.add(Conv2D(128, (3, 3), activation='relu'))
 model.add(MaxPooling2D((2, 2)))
 
+# Flatten the output of the convolutional layers
 model.add(Flatten())
 
-# Add dense layers
-model.add(Dense(128, activation='relu'))
+# Reshape to be compatible with LSTM
+model.add(Reshape((1, -1)))  # Reshape to (batch_size, time_steps, features)
+
+# Add LSTM layers
+model.add(LSTM(128, return_sequences=True))
 model.add(Dropout(0.2))
-model.add(Dense(256, activation='relu'))
+model.add(LSTM(256, return_sequences=True))
 model.add(Dropout(0.2))
-model.add(Dense(256, activation='relu'))
+model.add(LSTM(128))
 
 # Output layer for multi-label classification
-model.add(Dense(4, activation='softmax'))  # 4 output labels
+model.add(Dense(4, activation='softmax'))
+
+model.summary()
 
 
-# train_data, train_labels, test_data, test_labels = load_data()
+def load_data(split=0.8):
+    with open('memory.pkl', 'rb') as f:
+        memory = pickle.load(f)
+    
+    labels = []
+    obs = []
 
-# input_shape = train_data[0].shape
-# num_classes = train_labels[0].shape[0]
+    for i in range(len(memory)):
+        # shape 10*10*4
+        obs.append(memory[i]['obs'])
+        # encode the actions as one-hot vectors
+        action = np.zeros(4)
+        action[memory[i]['action']] = 1
+        labels.append(action)
 
-# model.compile(optimizer=Adam(learning_rate=0.001), loss='categorical_crossentropy', metrics=['accuracy'])
+    obs_train = obs[:int(len(obs) * split)]
+    labels_train = labels[:int(len(labels) * split)]
+    obs_test = obs[int(len(obs) * split):]
+    labels_test = labels[int(len(labels) * split):]
 
-# model.fit(
-#     train_data, 
-#     train_labels, 
-#     epochs=100, 
-#     batch_size=512, 
-#     validation_data=(test_data, test_labels),
-#     callbacks=[checkpoint]
-# )
+    # Ensure the lengths match
+    assert len(obs_train) == len(labels_train)
+    assert len(obs_test) == len(labels_test)
 
-# # Evaluate the model
-# test_loss, test_acc = model.evaluate(test_data, test_labels)
-# print("Test accuracy:", test_acc)
+    return np.array(obs_train), np.array(labels_train), np.array(obs_test), np.array(labels_test)
+    
+
+train_data, train_labels, test_data, test_labels = load_data()
+
+input_shape = train_data[0].shape
+print(f"{input_shape=}")
+num_classes = train_labels[0].shape[0]
+print(f"{num_classes=}")
+
+print(f"Length of train_data: {len(train_data)}")
+print(f"Length of train_labels: {len(train_labels)}")
+
+print(f"Shape of first element in train_data: {train_data[0].shape}")
+print(f"Shape of first element in train_labels: {train_labels[0].shape}")
+
+
+train_data = train_data.reshape((-1, 10, 10, 4))
+train_labels = train_labels.reshape((-1, 4))
+test_data = test_data.reshape((-1, 10, 10, 4))
+test_labels = test_labels.reshape((-1, 4))
+
+model.compile(optimizer=Adam(learning_rate=0.001), loss='categorical_crossentropy', metrics=['accuracy'])
+
+model.fit(
+    train_data, 
+    train_labels, 
+    epochs=250, 
+    batch_size=512, 
+    validation_data=(test_data, test_labels),
+    callbacks=[checkpoint]
+)
+
+# Evaluate the model
+test_loss, test_acc = model.evaluate(test_data, test_labels)
+print("Test accuracy:", test_acc)
 
 # load the best model
-model.load_weights('best_sokoban_model.keras')
+# model.load_weights('best_sokoban_model.keras')
 
 barriers, player_x, player_y, box, goals = load_function_from_json('maps')
 env = SokobanEnv((player_x, player_y), barriers, box, goals)

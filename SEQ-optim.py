@@ -42,6 +42,9 @@ def whole_sequences(split=0.8, max_seq_len=64):
                     temp_s = np.concatenate([temp_s, np.zeros((max_seq_len - len(temp_s), 10, 10, 4), dtype=np.int8)])
                     # Pad the labels with the last action with number 4
                     temp_l_s = np.concatenate([temp_l_s, np.full((max_seq_len - len(temp_l_s)), 4, dtype=np.int8)])
+                else:
+                    temp_s = temp_s[-max_seq_len:]
+                    temp_l_s = temp_l_s[-max_seq_len:]
                 
                 # Reshape the input data to be compatible with LSTM
                 temp_s = temp_s.reshape(max_seq_len, 10*10*4)
@@ -97,7 +100,7 @@ def train_and_evaluate_model(architecture, params, train_seq, train_labels_seq, 
     test_loss, test_acc = model.evaluate(test_seq, test_labels_seq)
     return test_acc, checkpoint_path
 
-max_seq_len = 64
+max_seq_len = 16
 train_seq, train_labels_seq, test_seq, test_labels_seq = whole_sequences(0.95, max_seq_len)
 
 # Define the different architectures and parameters to try
@@ -109,11 +112,11 @@ architectures = [
     [512, 256, 128, 64]
 ]
 params_list = [
-    {'dropout_rate': 0.5, 'max_seq_len': 64, 'epochs': 600, 'batch_size': 32},
-    {'dropout_rate': 0.4, 'max_seq_len': 64, 'epochs': 500, 'batch_size': 64},
-    {'dropout_rate': 0.3, 'max_seq_len': 64, 'epochs': 400, 'batch_size': 128},
-    {'dropout_rate': 0.2, 'max_seq_len': 64, 'epochs': 700, 'batch_size': 256},
-    {'dropout_rate': 0.1, 'max_seq_len': 64, 'epochs': 600, 'batch_size': 512}
+    {'dropout_rate': 0.5, 'max_seq_len': 16, 'epochs': 600, 'batch_size': 32},
+    {'dropout_rate': 0.4, 'max_seq_len': 16, 'epochs': 500, 'batch_size': 64},
+    {'dropout_rate': 0.3, 'max_seq_len': 16, 'epochs': 400, 'batch_size': 128},
+    {'dropout_rate': 0.2, 'max_seq_len': 16, 'epochs': 700, 'batch_size': 256},
+    {'dropout_rate': 0.1, 'max_seq_len': 16, 'epochs': 600, 'batch_size': 512}
 ]
 
 best_acc = 0
@@ -124,7 +127,7 @@ for architecture in architectures:
     for params in params_list:
         test_acc, model_path = train_and_evaluate_model(architecture, params, train_seq, train_labels_seq, test_seq, test_labels_seq)
         print(f"Test accuracy for architecture {architecture} with params {params}: {test_acc}")
-        with open('models/results.txt', 'a') as f:
+        with open('models-32/results.txt', 'a') as f:
             f.write(f"Test accuracy for architecture {architecture} with params {params}: {test_acc}\n")
             f.write(f"Model path: {model_path}\n")
         if test_acc > best_acc:

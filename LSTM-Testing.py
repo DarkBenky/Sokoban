@@ -1,7 +1,7 @@
 import tensorboard as tf
 from tensorflow.keras.callbacks import ModelCheckpoint, TensorBoard
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Reshape , Dropout
+from tensorflow.keras.layers import LSTM, Dense, Reshape , Dropout, BatchNormalization
 import numpy as np
 import random
 import json
@@ -29,10 +29,13 @@ checkpoint = ModelCheckpoint('models/LSTM/V2'+name, monitor='val_loss', verbose=
 model = Sequential([
     LSTM(128, input_shape=(seq_length, 10*10*4) , return_sequences=True),
     Dropout(0.3),
+    BatchNormalization(),
     LSTM(64, return_sequences=True),
     Dropout(0.3),
+    BatchNormalization(),
     LSTM(32),
     Dropout(0.3),
+    BatchNormalization(),
     Dense(5, activation='softmax')
 ])
 
